@@ -2,6 +2,8 @@
 
 Standalone worker package for NexusAI.
 
+For installation and day-one usage, start with the repository-level `README.md`.
+
 ## Features
 
 - Registers to control plane and sends heartbeat metrics.
