@@ -45,6 +45,29 @@ CONTROL_PLANE_API_TOKEN=
 NEXUS_WORKER_CLOUD_CONTEXT_POLICY=redact
 ```
 
+## 2b. Pick the Right Control-Plane URL
+
+When you later enable registration, `CONTROL_PLANE_URL` must be the base URL for the control-plane API as seen from the worker machine.
+
+Use:
+
+- a private address like `http://100.81.64.82:8000` if the worker can reach that server directly
+- a public hostname like `https://api.example.com` only if that hostname exposes `/v1/*`
+
+Do not assume the dashboard hostname is also the API hostname.
+
+The correct base URL must make these routes reachable:
+
+- `<BASE_URL>/v1/workers`
+- `<BASE_URL>/v1/bots`
+- `<BASE_URL>/v1/projects`
+
+Interpretation:
+
+- `200` means correct
+- `401` or `403` usually means the URL is correct and auth is the problem
+- `404` means the URL or path is wrong
+
 ## 3. Run the Bootstrap Utility
 
 From the repo root on the worker node:
@@ -68,6 +91,8 @@ Generated assets:
 - `generated/worker-node/bootstrap-summary.json`
 - service install assets for the current OS
 - direct runner script for the current OS
+
+All generated runtime files are written under `generated/worker-node/`, which is intended to remain local and is ignored by Git.
 
 Useful optional flags:
 

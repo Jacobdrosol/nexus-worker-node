@@ -14,3 +14,10 @@ build/
 dist/
 *.egg-info/
 generated/
+tmp/
+temp/
+cache/
+logs/
+runtime/
+state/
+.nexus-worker/

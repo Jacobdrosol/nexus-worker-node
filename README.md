@@ -69,6 +69,28 @@ Keep this off for local-only startup:
 
 - `NEXUS_WORKER_AUTO_REGISTER=0`
 
+## Choosing the Control-Plane URL
+
+Use the base URL that the worker machine can actually reach for the NexusAI control-plane API.
+
+Correct examples:
+
+- `http://100.81.64.82:8000` if the worker can reach your private server directly on that address
+- `https://api.example.com` if your reverse proxy exposes the control plane at `/v1/*` on that host
+
+Do not use a dashboard/chat host unless that same host really serves the control-plane API routes:
+
+- `GET <BASE_URL>/v1/workers`
+- `GET <BASE_URL>/v1/bots`
+- `GET <BASE_URL>/v1/projects`
+
+Rule:
+
+- use the private/direct IP or Tailscale/WireGuard address when the worker is on the same private network and that path is stable
+- use the Cloudflare/public hostname only if it is intentionally routing the control-plane API, not just the dashboard UI
+
+If `.../v1/workers` returns `404`, the base URL is wrong.
+
 ## Quick Start
 
 From a fresh machine, the shortest path is:
@@ -92,6 +114,8 @@ That writes:
 - `generated/worker-node/nexus-worker.env`
 - `generated/worker-node/bootstrap-summary.json`
 - OS-specific background-service install scripts
+
+All generated runtime files live under `generated/worker-node/`, which is ignored by Git by default.
 
 Bootstrap also writes a direct runner script so you can test the worker before installing it as a service.
 It writes `NEXUS_WORKER_AUTO_REGISTER=0` by default, so the worker stays local until you opt in.
