@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 
 from nexus_worker import __main__ as cli
 
@@ -46,3 +47,33 @@ def test_run_command_loads_project_env_then_generated_env(tmp_path, monkeypatch)
 
     assert called["ok"] is True
     assert os.environ["NEXUS_WORKER_PORT"] == "8012"
+
+
+def test_run_server_uses_current_config_path(tmp_path, monkeypatch):
+    config_path = tmp_path / "worker.yaml"
+    config_path.write_text("host: 0.0.0.0\nport: 8013\n", encoding="utf-8")
+
+    monkeypatch.setenv("NEXUS_WORKER_CONFIG_PATH", str(config_path))
+
+    captured: dict[str, object] = {}
+
+    class _DummyAgent:
+        app = object()
+
+    monkeypatch.setattr(cli.importlib, "reload", lambda module: _DummyAgent)
+    monkeypatch.setitem(__import__("sys").modules, "nexus_worker.agent", _DummyAgent)
+
+    def _fake_uvicorn_run(app, host, port, reload):
+        captured["app"] = app
+        captured["host"] = host
+        captured["port"] = port
+        captured["reload"] = reload
+
+    monkeypatch.setattr(cli.uvicorn, "run", _fake_uvicorn_run)
+
+    cli._run_server()
+
+    assert captured["app"] is _DummyAgent.app
+    assert captured["host"] == "0.0.0.0"
+    assert captured["port"] == 8013
+    assert captured["reload"] is False

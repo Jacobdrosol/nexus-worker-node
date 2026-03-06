@@ -1,13 +1,12 @@
 import argparse
 import asyncio
+import importlib
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import uvicorn
 
-from nexus_worker.agent import WORKER_CONFIG_PATH
 from nexus_worker.bootstrap import bootstrap_worker_node
 from nexus_worker.config_loader import ConfigLoader
 from nexus_worker.env import load_env_file
@@ -27,14 +26,21 @@ def _load_runtime_env(path: str | None, *, override: bool = True) -> None:
         load_env_file(path, override=override)
 
 
+def _current_config_path() -> str:
+    return os.environ.get("NEXUS_WORKER_CONFIG_PATH", "nexus_worker/config.yaml.example")
+
+
 def _run_server() -> None:
+    from nexus_worker import agent as agent_module
+
+    agent = importlib.reload(agent_module)
     cfg = {}
     try:
-        cfg = ConfigLoader.load_yaml(WORKER_CONFIG_PATH)
+        cfg = ConfigLoader.load_yaml(_current_config_path())
     except Exception:
         cfg = {}
     uvicorn.run(
-        "nexus_worker.agent:app",
+        agent.app,
         host=cfg.get("host", "0.0.0.0"),
         port=int(cfg.get("port", int(os.environ.get("NEXUS_WORKER_PORT", "8010")))),
         reload=False,
