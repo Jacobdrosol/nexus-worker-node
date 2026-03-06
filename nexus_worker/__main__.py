@@ -17,9 +17,14 @@ def _default_env_file() -> str:
     return ".env"
 
 
-def _load_runtime_env(path: str | None) -> None:
+def _generated_env_file() -> str:
+    output_dir = os.environ.get("NEXUS_WORKER_OUTPUT_DIR", "generated/worker-node")
+    return str(Path(output_dir) / "nexus-worker.env")
+
+
+def _load_runtime_env(path: str | None, *, override: bool = True) -> None:
     if path:
-        load_env_file(path)
+        load_env_file(path, override=override)
 
 
 def _run_server() -> None:
@@ -38,7 +43,7 @@ def _run_server() -> None:
 
 def _init_command(args: argparse.Namespace) -> None:
     if args.env_file:
-        load_env_file(args.env_file)
+        load_env_file(args.env_file, override=True)
 
     effective = argparse.Namespace(
         output_dir=args.output_dir or os.environ.get("NEXUS_WORKER_OUTPUT_DIR", "generated/worker-node"),
@@ -67,7 +72,10 @@ def _run_command(args: argparse.Namespace) -> None:
     env_file = args.env_file
     if env_file is None and Path(_default_env_file()).exists():
         env_file = _default_env_file()
-    _load_runtime_env(env_file)
+    _load_runtime_env(env_file, override=True)
+    generated_env = _generated_env_file()
+    if Path(generated_env).exists():
+        _load_runtime_env(generated_env, override=True)
     _run_server()
 
 
