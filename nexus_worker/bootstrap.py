@@ -101,11 +101,19 @@ def _write_yaml(path: Path, data: dict[str, Any]) -> None:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
-def _write_env_file(path: Path, *, control_plane_url: str, control_plane_api_token: str, config_path: Path) -> None:
+def _write_env_file(
+    path: Path,
+    *,
+    control_plane_url: str,
+    control_plane_api_token: str,
+    config_path: Path,
+    auto_register: bool,
+) -> None:
     lines = [
         f"NEXUS_WORKER_CONFIG_PATH={config_path.as_posix()}",
         f"CONTROL_PLANE_URL={control_plane_url}",
         f"CONTROL_PLANE_API_TOKEN={control_plane_api_token}",
+        f"NEXUS_WORKER_AUTO_REGISTER={1 if auto_register else 0}",
         "HEARTBEAT_INTERVAL=15",
         "NEXUS_WORKER_CLOUD_CONTEXT_POLICY=redact",
         "",
@@ -408,6 +416,7 @@ async def bootstrap_worker_node(args: argparse.Namespace) -> dict[str, Any]:
         control_plane_url=args.control_plane_url,
         control_plane_api_token=control_plane_token,
         config_path=config_path,
+        auto_register=bool(args.enable_control_plane_registration),
     )
 
     service_name = f"nexus-worker-{worker_id}"
@@ -436,6 +445,7 @@ async def bootstrap_worker_node(args: argparse.Namespace) -> dict[str, Any]:
         "platform": platform_id,
         "control_plane_url": args.control_plane_url,
         "control_plane_api_token_configured": bool(control_plane_token),
+        "control_plane_registration_enabled": bool(args.enable_control_plane_registration),
         "config_path": str(config_path),
         "env_path": str(env_path),
         "service_name": service_name,
@@ -452,6 +462,10 @@ async def bootstrap_worker_node(args: argparse.Namespace) -> dict[str, Any]:
             f"Verify local worker health at http://127.0.0.1:{port}/health.",
         ],
     }
+    if not args.enable_control_plane_registration:
+        summary["next_steps"].append(
+            "Edit generated/worker-node/nexus-worker.env and set NEXUS_WORKER_AUTO_REGISTER=1 when you are ready to connect this worker to a control plane."
+        )
     (output_dir / "bootstrap-summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary
 
@@ -465,12 +479,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--port", default=8010, type=int, help="Worker listen port.")
     parser.add_argument("--python", default="", help="Python executable to use for the background service.")
     parser.add_argument("--ollama-host", default="http://localhost:11434", help="Local Ollama host for model discovery.")
-    parser.add_argument("--control-plane-url", required=True, help="Control plane base URL.")
+    parser.add_argument("--control-plane-url", default="", help="Control plane base URL.")
     parser.add_argument("--control-plane-api-token", default="", help="Control plane API token.")
     parser.add_argument("--generate-token", action="store_true", help="Generate a token if one is not provided.")
     parser.add_argument("--pull-ollama-model", action="append", default=[], help="Ollama model to pull during bootstrap. May be passed multiple times.")
     parser.add_argument("--install-service", action="store_true", help="Attempt to install and start the generated background service.")
     parser.add_argument("--verify", action="store_true", help="Verify the local worker endpoints after bootstrap.")
+    parser.add_argument("--enable-control-plane-registration", action="store_true", help="Write bootstrap env so the worker auto-registers with the control plane on startup.")
     return parser.parse_args()
 
 

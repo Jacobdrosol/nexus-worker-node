@@ -4,6 +4,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from nexus_worker import agent
 from nexus_worker.api import capabilities, health, infer, infer_stream, models
 from nexus_worker.observability import install_observability
 
@@ -75,3 +76,13 @@ async def test_nexus_worker_metrics_endpoint(nx_worker_app):
         resp = await client.get("/metrics")
     assert resp.status_code == 200
     assert "nexus_worker_http_requests_total" in resp.text
+
+
+def test_nexus_worker_auto_register_defaults_off(monkeypatch):
+    monkeypatch.delenv("NEXUS_WORKER_AUTO_REGISTER", raising=False)
+    assert agent._auto_register_enabled() is False
+
+
+def test_nexus_worker_auto_register_can_be_enabled(monkeypatch):
+    monkeypatch.setenv("NEXUS_WORKER_AUTO_REGISTER", "1")
+    assert agent._auto_register_enabled() is True

@@ -16,15 +16,33 @@ from nexus_worker.observability import install_observability
 logger = logging.getLogger(__name__)
 
 WORKER_CONFIG_PATH = os.environ.get("NEXUS_WORKER_CONFIG_PATH", "nexus_worker/config.yaml.example")
-CONTROL_PLANE_URL = os.environ.get("CONTROL_PLANE_URL", "http://localhost:8000")
-CONTROL_PLANE_API_TOKEN = os.environ.get("CONTROL_PLANE_API_TOKEN", "").strip()
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "15"))
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _control_plane_url() -> str:
+    return os.environ.get("CONTROL_PLANE_URL", "").strip()
+
+
+def _control_plane_api_token() -> str:
+    return os.environ.get("CONTROL_PLANE_API_TOKEN", "").strip()
+
+
+def _auto_register_enabled() -> bool:
+    return _env_flag("NEXUS_WORKER_AUTO_REGISTER", default=False)
+
+
 def _cp_headers() -> Dict[str, str]:
-    if not CONTROL_PLANE_API_TOKEN:
+    token = _control_plane_api_token()
+    if not token:
         return {}
-    return {"X-Nexus-API-Key": CONTROL_PLANE_API_TOKEN}
+    return {"X-Nexus-API-Key": token}
 
 
 @asynccontextmanager
@@ -47,32 +65,44 @@ async def lifespan(app: FastAPI):
 
     app.state.worker_config = worker_config
     worker_id = worker_config.get("id", "nexus-worker-standalone")
+    control_plane_url = _control_plane_url()
+    auto_register = _auto_register_enabled()
 
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{CONTROL_PLANE_URL}/v1/workers",
-                json=worker_config,
-                headers=_cp_headers(),
-            )
-            resp.raise_for_status()
-            logger.info("nexus_worker registered with control plane as %s", worker_id)
-    except Exception as e:
-        logger.warning("nexus_worker registration failed: %s", e)
+    heartbeat_task: asyncio.Task | None = None
+    if auto_register and control_plane_url:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{control_plane_url}/v1/workers",
+                    json=worker_config,
+                    headers=_cp_headers(),
+                )
+                resp.raise_for_status()
+                logger.info("nexus_worker registered with control plane as %s", worker_id)
+            heartbeat_task = asyncio.create_task(_send_heartbeats(worker_id, app))
+        except Exception as e:
+            logger.warning("nexus_worker registration failed: %s", e)
+    else:
+        logger.info(
+            "nexus_worker running in local-only mode; set NEXUS_WORKER_AUTO_REGISTER=1 and CONTROL_PLANE_URL to enable control-plane registration"
+        )
 
-    heartbeat_task = asyncio.create_task(_send_heartbeats(worker_id, app))
     yield
-    heartbeat_task.cancel()
-    try:
-        await heartbeat_task
-    except asyncio.CancelledError:
-        pass
+    if heartbeat_task is not None:
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
 
 
 async def _send_heartbeats(worker_id: str, app: FastAPI) -> None:
     while True:
         await asyncio.sleep(HEARTBEAT_INTERVAL)
         try:
+            control_plane_url = _control_plane_url()
+            if not control_plane_url:
+                continue
             hw = detect_hardware_profile()
             cpu = hw.get("cpu") or {}
             gpus = hw.get("gpus") or []
@@ -84,7 +114,7 @@ async def _send_heartbeats(worker_id: str, app: FastAPI) -> None:
             }
             async with httpx.AsyncClient(timeout=8.0) as client:
                 await client.post(
-                    f"{CONTROL_PLANE_URL}/v1/workers/{worker_id}/heartbeat",
+                    f"{control_plane_url}/v1/workers/{worker_id}/heartbeat",
                     json={"metrics": metrics},
                     headers=_cp_headers(),
                 )

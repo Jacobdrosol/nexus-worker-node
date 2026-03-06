@@ -5,7 +5,7 @@ This guide prepares a standalone `nexus_worker` node that:
 - discovers local Ollama models and common CLI tools
 - writes a worker config and env file
 - generates background-service install assets for Linux, macOS, or Windows
-- connects back to the NexusAI control plane
+- can later connect back to the NexusAI control plane when explicitly enabled
 
 ## 1. Prerequisites
 
@@ -24,8 +24,6 @@ From the repo root on the worker node:
 
 ```bash
 python -m nexus_worker.bootstrap \
-  --control-plane-url http://YOUR_CONTROL_PLANE_HOST:8000 \
-  --control-plane-api-token YOUR_SHARED_TOKEN \
   --worker-name "Linux Worker 01" \
   --output-dir ./generated/worker-node
 ```
@@ -34,8 +32,6 @@ Optional:
 
 ```bash
 python -m nexus_worker.bootstrap \
-  --control-plane-url http://YOUR_CONTROL_PLANE_HOST:8000 \
-  --control-plane-api-token YOUR_SHARED_TOKEN \
   --worker-name "Linux Worker 01" \
   --pull-ollama-model llama3.1:8b \
   --pull-ollama-model nomic-embed-text
@@ -53,6 +49,7 @@ Useful optional flags:
 
 - `--install-service`: attempt to install and start the generated service
 - `--verify`: check local `/health` and `/capabilities` after bootstrap
+- `--enable-control-plane-registration`: opt in to control-plane registration on startup
 
 Direct-run test before installing a service:
 
@@ -91,6 +88,8 @@ CLI metadata includes:
 - approval/setup hints
 
 This metadata is written into `nexus-worker.yaml` and exposed by `GET /capabilities`.
+
+By default, bootstrap writes `NEXUS_WORKER_AUTO_REGISTER=0` so the worker remains local-only until you explicitly enable registration.
 
 ## 4. Install as a Background Service
 
