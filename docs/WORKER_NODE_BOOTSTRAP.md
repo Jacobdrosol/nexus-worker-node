@@ -47,6 +47,26 @@ Generated assets:
 - `generated/worker-node/nexus-worker.env`
 - `generated/worker-node/bootstrap-summary.json`
 - service install assets for the current OS
+- direct runner script for the current OS
+
+Useful optional flags:
+
+- `--install-service`: attempt to install and start the generated service
+- `--verify`: check local `/health` and `/capabilities` after bootstrap
+
+Direct-run test before installing a service:
+
+Linux/macOS:
+
+```bash
+sh ./generated/worker-node/run-nexus-worker.sh
+```
+
+Windows:
+
+```powershell
+.\generated\worker-node\run-nexus-worker.cmd
+```
 
 ## 3. What Gets Discovered
 

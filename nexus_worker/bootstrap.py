@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import platform
@@ -13,6 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import httpx
 import yaml
 
 from nexus_worker.manager.cli_tools import discover_cli_tools
@@ -109,6 +111,19 @@ def _write_env_file(path: Path, *, control_plane_url: str, control_plane_api_tok
         "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _unix_runner_text(workdir: Path, env_path: Path, python_bin: str) -> str:
+    return "\n".join(
+        [
+            "#!/usr/bin/env sh",
+            "set -eu",
+            f"set -a; . \"{env_path.as_posix()}\"; set +a",
+            f"cd \"{workdir.as_posix()}\"",
+            f"exec \"{python_bin}\" -m nexus_worker",
+            "",
+        ]
+    )
 
 
 def _linux_service_text(service_name: str, workdir: Path, env_path: Path, python_bin: str) -> str:
@@ -214,6 +229,9 @@ def _install_scripts(
 ) -> dict[str, str]:
     out: dict[str, str] = {}
     if platform_id == "linux":
+        runner_path = workdir / "run-nexus-worker.sh"
+        runner_path.write_text(_unix_runner_text(workdir, env_path, python_bin), encoding="utf-8")
+        runner_path.chmod(0o755)
         service_path = workdir / f"{service_name}.service"
         service_path.write_text(_linux_service_text(service_name, workdir, env_path, python_bin), encoding="utf-8")
         install_path = workdir / "install-service.sh"
@@ -231,9 +249,14 @@ def _install_scripts(
             ),
             encoding="utf-8",
         )
+        install_path.chmod(0o755)
+        out["runner_script"] = runner_path.name
         out["service_file"] = service_path.name
         out["install_script"] = install_path.name
     elif platform_id == "macos":
+        runner_path = workdir / "run-nexus-worker.sh"
+        runner_path.write_text(_unix_runner_text(workdir, env_path, python_bin), encoding="utf-8")
+        runner_path.chmod(0o755)
         plist_path = workdir / f"{service_name}.plist"
         plist_path.write_text(
             _macos_plist_text(service_name, workdir, control_plane_url, control_plane_api_token, python_bin),
@@ -254,6 +277,8 @@ def _install_scripts(
             ),
             encoding="utf-8",
         )
+        install_path.chmod(0o755)
+        out["runner_script"] = runner_path.name
         out["service_file"] = plist_path.name
         out["install_script"] = install_path.name
     else:
@@ -264,6 +289,65 @@ def _install_scripts(
         out["runner_script"] = cmd_path.name
         out["install_script"] = install_path.name
     return out
+
+
+def _service_install_command(platform_id: str, output_dir: Path, service_assets: dict[str, str]) -> list[str]:
+    install_script = service_assets["install_script"]
+    if platform_id == "windows":
+        return [
+            "powershell",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(output_dir / install_script),
+        ]
+    return ["sh", str(output_dir / install_script)]
+
+
+def _manual_run_command(platform_id: str, output_dir: Path, service_assets: dict[str, str]) -> list[str]:
+    runner_script = service_assets["runner_script"]
+    if platform_id == "windows":
+        return [str(output_dir / runner_script)]
+    return ["sh", str(output_dir / runner_script)]
+
+
+def _run_command(command: list[str]) -> dict[str, Any]:
+    try:
+        proc = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+    except Exception as exc:
+        return {"ok": False, "command": command, "detail": str(exc)}
+    detail = (proc.stdout or proc.stderr or "").strip()[:1000]
+    return {
+        "ok": proc.returncode == 0,
+        "command": command,
+        "returncode": proc.returncode,
+        "detail": detail,
+    }
+
+
+async def _verify_local_worker(host: str, port: int) -> dict[str, Any]:
+    base_url = f"http://127.0.0.1:{port}"
+    results: dict[str, Any] = {"base_url": base_url}
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        for path in ("/health", "/capabilities"):
+            try:
+                resp = await client.get(f"{base_url}{path}")
+                results[path] = {
+                    "ok": resp.status_code == 200,
+                    "status_code": resp.status_code,
+                }
+            except Exception as exc:
+                results[path] = {
+                    "ok": False,
+                    "detail": str(exc),
+                }
+    return results
 
 
 def _pull_ollama_models(ollama_host: str, models: list[str]) -> list[dict[str, Any]]:
@@ -337,6 +421,14 @@ async def bootstrap_worker_node(args: argparse.Namespace) -> dict[str, Any]:
         control_plane_token,
     )
     pull_results = _pull_ollama_models(args.ollama_host, args.pull_ollama_model or []) if args.pull_ollama_model else []
+    install_result: dict[str, Any] | None = None
+    verify_result: dict[str, Any] | None = None
+    if args.install_service:
+        install_result = _run_command(_service_install_command(platform_id, output_dir, service_assets))
+    if args.verify:
+        verify_result = await _verify_local_worker(host, port)
+
+    manual_run_command = _manual_run_command(platform_id, output_dir, service_assets)
 
     summary = {
         "worker_id": worker_id,
@@ -348,9 +440,17 @@ async def bootstrap_worker_node(args: argparse.Namespace) -> dict[str, Any]:
         "env_path": str(env_path),
         "service_name": service_name,
         "service_assets": service_assets,
+        "manual_run_command": manual_run_command,
         "discovered_models": local_models,
         "discovered_cli_tools": cli_tools,
         "ollama_pull_results": pull_results,
+        "service_install_result": install_result,
+        "verify_result": verify_result,
+        "next_steps": [
+            f"Run {' '.join(manual_run_command)} to start the worker directly.",
+            f"Run {' '.join(_service_install_command(platform_id, output_dir, service_assets))} to install it as a background service.",
+            f"Verify local worker health at http://127.0.0.1:{port}/health.",
+        ],
     }
     (output_dir / "bootstrap-summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary
@@ -369,12 +469,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--control-plane-api-token", default="", help="Control plane API token.")
     parser.add_argument("--generate-token", action="store_true", help="Generate a token if one is not provided.")
     parser.add_argument("--pull-ollama-model", action="append", default=[], help="Ollama model to pull during bootstrap. May be passed multiple times.")
+    parser.add_argument("--install-service", action="store_true", help="Attempt to install and start the generated background service.")
+    parser.add_argument("--verify", action="store_true", help="Verify the local worker endpoints after bootstrap.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
-    summary = __import__("asyncio").run(bootstrap_worker_node(args))
+    summary = asyncio.run(bootstrap_worker_node(args))
     print(json.dumps(summary, indent=2))
 
 

@@ -37,6 +37,8 @@ async def test_bootstrap_worker_node_generates_assets(tmp_path: Path):
         control_plane_api_token="secret-token",
         generate_token=False,
         pull_ollama_model=[],
+        install_service=False,
+        verify=False,
     )
 
     with patch("nexus_worker.bootstrap.discover_local_models", return_value={"models": [{"provider": "ollama", "name": "llama3.1:8b"}], "errors": []}):
@@ -65,4 +67,34 @@ async def test_bootstrap_worker_node_generates_assets(tmp_path: Path):
 
     summary_json = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary_json["service_name"].startswith("nexus-worker-worker-01")
+    assert summary_json["manual_run_command"]
 
+
+async def test_bootstrap_worker_node_can_attempt_service_install_and_verify(tmp_path: Path):
+    args = Namespace(
+        output_dir=str(tmp_path),
+        worker_id="worker-02",
+        worker_name="Worker 02",
+        host="worker-host",
+        port=8010,
+        python="/usr/bin/python3",
+        ollama_host="http://localhost:11434",
+        control_plane_url="http://control-plane:8000",
+        control_plane_api_token="secret-token",
+        generate_token=False,
+        pull_ollama_model=[],
+        install_service=True,
+        verify=True,
+    )
+
+    with patch("nexus_worker.bootstrap.discover_local_models", return_value={"models": [], "errors": []}):
+        with patch("nexus_worker.bootstrap.discover_cli_tools", return_value=[]):
+            with patch("nexus_worker.bootstrap._run_command", return_value={"ok": True, "detail": "installed"}):
+                with patch(
+                    "nexus_worker.bootstrap._verify_local_worker",
+                    return_value={"/health": {"ok": True, "status_code": 200}, "/capabilities": {"ok": True, "status_code": 200}},
+                ):
+                    summary = await bootstrap_worker_node(args)
+
+    assert summary["service_install_result"]["ok"] is True
+    assert summary["verify_result"]["/health"]["ok"] is True

@@ -36,6 +36,16 @@ pip install .
 
 ## Quick Start
 
+From a fresh machine, the shortest path is:
+
+```bash
+pip install .
+nexus-worker-bootstrap \
+  --control-plane-url http://YOUR_CONTROL_PLANE_HOST:8000 \
+  --control-plane-api-token YOUR_SHARED_TOKEN \
+  --worker-name "My Worker Node"
+```
+
 Generate a worker config and service assets:
 
 ```bash
@@ -51,6 +61,40 @@ That writes:
 - `generated/worker-node/nexus-worker.env`
 - `generated/worker-node/bootstrap-summary.json`
 - OS-specific background-service install scripts
+
+Bootstrap also writes a direct runner script so you can test the worker before installing it as a service.
+
+### Start it directly today
+
+Linux/macOS:
+
+```bash
+sh generated/worker-node/run-nexus-worker.sh
+```
+
+Windows:
+
+```powershell
+.\generated\worker-node\run-nexus-worker.cmd
+```
+
+### One-command bootstrap extras
+
+You can also ask the bootstrap utility to attempt service installation and local verification:
+
+```bash
+nexus-worker-bootstrap \
+  --control-plane-url http://YOUR_CONTROL_PLANE_HOST:8000 \
+  --control-plane-api-token YOUR_SHARED_TOKEN \
+  --worker-name "My Worker Node" \
+  --install-service \
+  --verify
+```
+
+Notes:
+
+- `--install-service` may require elevated privileges depending on OS.
+- `--verify` checks `http://127.0.0.1:<port>/health` and `/capabilities`.
 
 Then install the generated service:
 
