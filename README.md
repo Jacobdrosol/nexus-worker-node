@@ -36,21 +36,54 @@ pip install -e .[test]
 pip install .
 ```
 
+## First-Time Setup
+
+1. Copy the example env file.
+
+Linux/macOS:
+
+```bash
+cp .env.example .env
+```
+
+Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+2. Edit `.env` for that machine.
+
+Most users should set:
+
+- `NEXUS_WORKER_NAME`
+- `NEXUS_WORKER_PORT`
+- `OLLAMA_HOST` if Ollama is not on the default port
+
+Leave these blank unless you are ready to connect this worker to NexusAI:
+
+- `CONTROL_PLANE_URL`
+- `CONTROL_PLANE_API_TOKEN`
+
+Keep this off for local-only startup:
+
+- `NEXUS_WORKER_AUTO_REGISTER=0`
+
 ## Quick Start
 
 From a fresh machine, the shortest path is:
 
 ```bash
 pip install .
-nexus-worker-bootstrap \
-  --worker-name "My Worker Node"
+cp .env.example .env
+# edit .env
+nexus-worker init
 ```
 
 Generate a worker config and service assets:
 
 ```bash
-nexus-worker-bootstrap \
-  --worker-name "My Worker Node"
+nexus-worker init
 ```
 
 That writes:
@@ -68,13 +101,13 @@ It writes `NEXUS_WORKER_AUTO_REGISTER=0` by default, so the worker stays local u
 Linux/macOS:
 
 ```bash
-sh generated/worker-node/run-nexus-worker.sh
+nexus-worker run
 ```
 
 Windows:
 
 ```powershell
-.\generated\worker-node\run-nexus-worker.cmd
+nexus-worker run
 ```
 
 ### One-command bootstrap extras
@@ -82,10 +115,7 @@ Windows:
 You can also ask the bootstrap utility to attempt service installation and local verification:
 
 ```bash
-nexus-worker-bootstrap \
-  --control-plane-url http://YOUR_CONTROL_PLANE_HOST:8000 \
-  --control-plane-api-token YOUR_SHARED_TOKEN \
-  --worker-name "My Worker Node" \
+nexus-worker init \
   --install-service \
   --verify
 ```
@@ -108,8 +138,7 @@ CONTROL_PLANE_API_TOKEN=YOUR_SHARED_TOKEN
 or generate it that way up front:
 
 ```bash
-nexus-worker-bootstrap \
-  --worker-name "My Worker Node" \
+nexus-worker init \
   --control-plane-url http://YOUR_CONTROL_PLANE_HOST:8000 \
   --control-plane-api-token YOUR_SHARED_TOKEN \
   --enable-control-plane-registration
@@ -120,22 +149,19 @@ Then install the generated service:
 ### Linux
 
 ```bash
-cd generated/worker-node
-sh ./install-service.sh
+nexus-worker install-service
 ```
 
 ### macOS
 
 ```bash
-cd generated/worker-node
-sh ./install-service.sh
+nexus-worker install-service
 ```
 
 ### Windows
 
 ```powershell
-cd .\generated\worker-node
-.\install-service.ps1
+nexus-worker install-service
 ```
 
 ## Manual Run
@@ -143,13 +169,13 @@ cd .\generated\worker-node
 If you want to run it directly first:
 
 ```bash
-python -m nexus_worker
+nexus-worker run
 ```
 
 or:
 
 ```bash
-nexus-worker
+python -m nexus_worker run
 ```
 
 Default runtime assumptions:
@@ -163,7 +189,9 @@ Default runtime assumptions:
 
 Main environment variables:
 
+- `NEXUS_WORKER_NAME`
 - `NEXUS_WORKER_CONFIG_PATH`
+- `NEXUS_WORKER_OUTPUT_DIR`
 - `CONTROL_PLANE_URL`
 - `CONTROL_PLANE_API_TOKEN`
 - `HEARTBEAT_INTERVAL`

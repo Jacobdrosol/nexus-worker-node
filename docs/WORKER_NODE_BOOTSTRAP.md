@@ -18,21 +18,45 @@ This guide prepares a standalone `nexus_worker` node that:
   - GitHub CLI
   - Docker
 
-## 2. Run the Bootstrap Utility
+## 2. Create Your Local Env File
+
+Copy the example file:
+
+```bash
+cp .env.example .env
+```
+
+Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Edit `.env` for that machine.
+
+Recommended first local setup:
+
+```env
+NEXUS_WORKER_NAME=My Worker Node
+NEXUS_WORKER_PORT=8010
+NEXUS_WORKER_AUTO_REGISTER=0
+CONTROL_PLANE_URL=
+CONTROL_PLANE_API_TOKEN=
+NEXUS_WORKER_CLOUD_CONTEXT_POLICY=redact
+```
+
+## 3. Run the Bootstrap Utility
 
 From the repo root on the worker node:
 
 ```bash
-python -m nexus_worker.bootstrap \
-  --worker-name "Linux Worker 01" \
-  --output-dir ./generated/worker-node
+nexus-worker init
 ```
 
 Optional:
 
 ```bash
-python -m nexus_worker.bootstrap \
-  --worker-name "Linux Worker 01" \
+nexus-worker init \
   --pull-ollama-model llama3.1:8b \
   --pull-ollama-model nomic-embed-text
 ```
@@ -65,7 +89,7 @@ Windows:
 .\generated\worker-node\run-nexus-worker.cmd
 ```
 
-## 3. What Gets Discovered
+## 4. What Gets Discovered
 
 The bootstrap utility detects:
 
@@ -91,7 +115,7 @@ This metadata is written into `nexus-worker.yaml` and exposed by `GET /capabilit
 
 By default, bootstrap writes `NEXUS_WORKER_AUTO_REGISTER=0` so the worker remains local-only until you explicitly enable registration.
 
-## 4. Install as a Background Service
+## 5. Install as a Background Service
 
 ### Linux
 
@@ -103,8 +127,7 @@ The bootstrap output includes:
 Run:
 
 ```bash
-cd generated/worker-node
-sh ./install-service.sh
+nexus-worker install-service
 ```
 
 ### macOS
@@ -117,8 +140,7 @@ The bootstrap output includes:
 Run:
 
 ```bash
-cd generated/worker-node
-sh ./install-service.sh
+nexus-worker install-service
 ```
 
 ### Windows
@@ -128,16 +150,15 @@ The bootstrap output includes:
 - `run-nexus-worker.cmd`
 - `install-service.ps1`
 
-Run PowerShell as Administrator:
+Run:
 
 ```powershell
-cd .\generated\worker-node
-.\install-service.ps1
+nexus-worker install-service
 ```
 
-Windows uses a startup scheduled task in this first pass. That keeps the worker running in the background without adding a separate service wrapper dependency.
+Windows uses a logon scheduled task for the current user by default. That avoids requiring `SYSTEM` access for first-time setup.
 
-## 5. Verify the Worker
+## 6. Verify the Worker
 
 After the service starts, verify:
 
@@ -152,7 +173,7 @@ Then in NexusAI:
 - confirm the node is registered and online
 - inspect worker capabilities
 
-## 6. Current Scope
+## 7. Current Scope
 
 This bootstrap flow does:
 

@@ -70,6 +70,11 @@ async def test_bootstrap_worker_node_generates_assets(tmp_path: Path):
     summary_json = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary_json["service_name"].startswith("nexus-worker-worker-01")
     assert summary_json["manual_run_command"]
+    install_script = tmp_path / "install-service.ps1"
+    if install_script.exists():
+        install_text = install_script.read_text(encoding="utf-8")
+        assert "WindowsIdentity" in install_text
+        assert "InteractiveToken" in install_text
 
 
 async def test_bootstrap_worker_node_can_attempt_service_install_and_verify(tmp_path: Path):
