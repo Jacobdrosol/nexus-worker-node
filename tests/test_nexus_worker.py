@@ -57,6 +57,45 @@ async def test_nexus_worker_infer_ollama(nx_worker_app):
 
 
 @pytest.mark.anyio
+async def test_ollama_backend_maps_max_tokens_to_num_predict():
+    from nexus_worker.backends import ollama_backend
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": "ok"}, "prompt_eval_count": 1, "eval_count": 1}
+
+    captured = {}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json=None):
+            captured["url"] = url
+            captured["json"] = json
+            return FakeResponse()
+
+    with patch("nexus_worker.backends.ollama_backend.httpx.AsyncClient", return_value=FakeClient()):
+        result = await ollama_backend.infer(
+            model="llama3.1:8b",
+            messages=[{"role": "user", "content": "hello"}],
+            params={"max_tokens": 512, "temperature": 0.2},
+            host="http://localhost:11434",
+        )
+
+    assert result["output"] == "ok"
+    assert captured["json"]["options"]["num_predict"] == 512
+    assert "max_tokens" not in captured["json"]["options"]
+    assert captured["json"]["options"]["temperature"] == 0.2
+
+
+@pytest.mark.anyio
 async def test_nexus_worker_infer_stream_ollama(nx_worker_app):
     async def _fake_stream(**kwargs):
         yield {"event": "token", "text": "hel"}

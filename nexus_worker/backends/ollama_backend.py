@@ -5,6 +5,14 @@ import httpx
 from fastapi import HTTPException
 
 
+def _ollama_options(params: dict) -> dict:
+    options = dict(params or {})
+    max_tokens = options.pop("max_tokens", None)
+    if max_tokens is not None and "num_predict" not in options:
+        options["num_predict"] = max_tokens
+    return options
+
+
 async def infer(
     model: str,
     messages: list[dict],
@@ -15,7 +23,7 @@ async def infer(
         "model": model,
         "messages": messages,
         "stream": False,
-        "options": params,
+        "options": _ollama_options(params),
     }
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -62,7 +70,7 @@ async def infer_stream(
         "model": model,
         "messages": messages,
         "stream": True,
-        "options": params,
+        "options": _ollama_options(params),
     }
     chunks: list[str] = []
     final_usage = {"prompt_tokens": 0, "completion_tokens": 0}
