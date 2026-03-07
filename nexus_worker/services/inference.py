@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, List, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Tuple
 
 from fastapi import HTTPException
 
@@ -96,3 +96,33 @@ async def run_inference(
         return await cli_backend.infer(command=command or model, params=params)
 
     raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
+
+
+async def run_inference_stream(
+    provider: str,
+    model: str,
+    messages: List[Dict[str, Any]],
+    params: Dict[str, Any],
+    worker_config: Dict[str, Any],
+    command: str = "",
+) -> AsyncGenerator[Dict[str, Any], None]:
+    if provider == "ollama":
+        async for event in ollama_backend.infer_stream(
+            model=model,
+            messages=messages,
+            params=params,
+            host=str(worker_config.get("ollama_host") or "http://localhost:11434"),
+        ):
+            yield event
+        return
+
+    # Fallback for non-streaming providers: compute once and emit a final event.
+    result = await run_inference(
+        provider=provider,
+        model=model,
+        messages=messages,
+        params=params,
+        worker_config=worker_config,
+        command=command,
+    )
+    yield {"event": "final", **result}

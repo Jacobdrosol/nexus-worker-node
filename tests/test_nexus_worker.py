@@ -57,6 +57,32 @@ async def test_nexus_worker_infer_ollama(nx_worker_app):
 
 
 @pytest.mark.anyio
+async def test_nexus_worker_infer_stream_ollama(nx_worker_app):
+    async def _fake_stream(**kwargs):
+        yield {"event": "token", "text": "hel"}
+        yield {"event": "token", "text": "lo"}
+        yield {"event": "final", "output": "hello", "usage": {"prompt_tokens": 1, "completion_tokens": 2}}
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        with patch(
+            "nexus_worker.api.infer_stream.run_inference_stream",
+            new=_fake_stream,
+        ):
+            resp = await client.post(
+                "/infer/stream",
+                json={
+                    "model": "llama3",
+                    "provider": "ollama",
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+            )
+    assert resp.status_code == 200
+    assert "event: token" in resp.text
+    assert '"text": "hel"' in resp.text
+    assert "event: final" in resp.text
+
+
+@pytest.mark.anyio
 async def test_ollama_backend_timeout_maps_to_504():
     from fastapi import HTTPException
     from nexus_worker.backends import ollama_backend

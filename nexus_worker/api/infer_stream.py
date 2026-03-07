@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from nexus_worker.services.inference import run_inference
+from nexus_worker.services.inference import run_inference_stream
 
 router = APIRouter(tags=["infer"])
 logger = logging.getLogger(__name__)
@@ -29,20 +29,17 @@ async def infer_stream(request: Request, body: InferStreamRequest) -> StreamingR
             getattr(request.app.state, "inference_inflight", 0) or 0
         ) + 1
         try:
-            result = await run_inference(
+            async for event in run_inference_stream(
                 provider=body.provider,
                 model=body.model,
                 messages=body.messages,
                 params=body.params or {},
                 worker_config=cfg,
                 command=body.command or "",
-            )
-            text = str(result.get("output", ""))
-            chunk_size = 80
-            for i in range(0, len(text), chunk_size):
-                chunk = text[i : i + chunk_size]
-                yield f"event: token\ndata: {json.dumps({'text': chunk})}\n\n"
-            yield f"event: final\ndata: {json.dumps(result)}\n\n"
+            ):
+                event_name = str(event.get("event") or "message")
+                payload = {k: v for k, v in event.items() if k != "event"}
+                yield f"event: {event_name}\ndata: {json.dumps(payload)}\n\n"
             yield "event: done\ndata: {}\n\n"
         except HTTPException as e:
             payload = {"error": e.detail, "status_code": e.status_code}
