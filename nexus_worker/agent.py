@@ -45,6 +45,20 @@ def _cp_headers() -> Dict[str, str]:
     return {"X-Nexus-API-Key": token}
 
 
+async def _register_with_control_plane(worker_config: dict) -> bool:
+    control_plane_url = _control_plane_url()
+    if not control_plane_url:
+        return False
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            f"{control_plane_url}/v1/workers",
+            json=worker_config,
+            headers=_cp_headers(),
+        )
+        resp.raise_for_status()
+    return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -71,17 +85,11 @@ async def lifespan(app: FastAPI):
     heartbeat_task: asyncio.Task | None = None
     if auto_register and control_plane_url:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    f"{control_plane_url}/v1/workers",
-                    json=worker_config,
-                    headers=_cp_headers(),
-                )
-                resp.raise_for_status()
-                logger.info("nexus_worker registered with control plane as %s", worker_id)
-            heartbeat_task = asyncio.create_task(_send_heartbeats(worker_id, app))
+            await _register_with_control_plane(worker_config)
+            logger.info("nexus_worker registered with control plane as %s", worker_id)
         except Exception as e:
             logger.warning("nexus_worker registration failed: %s", e)
+        heartbeat_task = asyncio.create_task(_send_heartbeats(worker_id, app))
     else:
         logger.info(
             "nexus_worker running in local-only mode; set NEXUS_WORKER_AUTO_REGISTER=1 and CONTROL_PLANE_URL to enable control-plane registration"
@@ -113,11 +121,20 @@ async def _send_heartbeats(worker_id: str, app: FastAPI) -> None:
                 "queue_depth": int(getattr(app.state, "inference_inflight", 0) or 0),
             }
             async with httpx.AsyncClient(timeout=8.0) as client:
-                await client.post(
+                resp = await client.post(
                     f"{control_plane_url}/v1/workers/{worker_id}/heartbeat",
                     json={"metrics": metrics},
                     headers=_cp_headers(),
                 )
+                if resp.status_code == 404:
+                    await _register_with_control_plane(getattr(app.state, "worker_config", {}) or {})
+                    logger.info("nexus_worker re-registered with control plane as %s after heartbeat 404", worker_id)
+                    resp = await client.post(
+                        f"{control_plane_url}/v1/workers/{worker_id}/heartbeat",
+                        json={"metrics": metrics},
+                        headers=_cp_headers(),
+                    )
+                resp.raise_for_status()
         except Exception as e:
             logger.warning("nexus_worker heartbeat failed: %s", e)
 
