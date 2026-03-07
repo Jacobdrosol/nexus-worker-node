@@ -1,4 +1,5 @@
 import asyncio
+import json
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -128,6 +129,63 @@ async def test_nexus_worker_infer_stream_ollama(nx_worker_app):
     assert "event: token" in resp.text
     assert '"text": "hel"' in resp.text
     assert "event: final" in resp.text
+
+
+@pytest.mark.anyio
+async def test_ollama_backend_stream_finalizes_immediately_on_done():
+    from nexus_worker.backends import ollama_backend
+
+    chunks = [
+        json.dumps({"message": {"content": "hel"}, "done": False}),
+        json.dumps({
+            "message": {"content": "lo"},
+            "done": True,
+            "prompt_eval_count": 1,
+            "eval_count": 2,
+        }),
+    ]
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def aiter_lines(self):
+            for chunk in chunks:
+                yield chunk
+            while True:
+                await asyncio.sleep(10)
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, method, url, json=None):
+            return FakeResponse()
+
+    events = []
+    with patch("nexus_worker.backends.ollama_backend.httpx.AsyncClient", return_value=FakeClient()):
+        async for event in ollama_backend.infer_stream(
+            model="llama3.1:8b",
+            messages=[{"role": "user", "content": "hello"}],
+            params={},
+            host="http://localhost:11434",
+        ):
+            events.append(event)
+
+    assert events == [
+        {"event": "token", "text": "hel"},
+        {"event": "token", "text": "lo"},
+        {"event": "final", "output": "hello", "usage": {"prompt_tokens": 1, "completion_tokens": 2}},
+    ]
 
 
 @pytest.mark.anyio

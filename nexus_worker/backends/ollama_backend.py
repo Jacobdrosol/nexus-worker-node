@@ -78,6 +78,7 @@ async def infer_stream(
     }
     chunks: list[str] = []
     final_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    saw_done = False
     try:
         async with httpx.AsyncClient(timeout=_ollama_timeout()) as client:
             async with client.stream("POST", f"{host}/api/chat", json=body) as response:
@@ -91,15 +92,23 @@ async def infer_stream(
                         chunks.append(text)
                         yield {"event": "token", "text": text}
                     if data.get("done"):
+                        saw_done = True
                         final_usage = {
                             "prompt_tokens": data.get("prompt_eval_count", 0),
                             "completion_tokens": data.get("eval_count", 0),
                         }
-        yield {
-            "event": "final",
-            "output": "".join(chunks),
-            "usage": final_usage,
-        }
+                        yield {
+                            "event": "final",
+                            "output": "".join(chunks),
+                            "usage": final_usage,
+                        }
+                        return
+        if chunks or saw_done:
+            yield {
+                "event": "final",
+                "output": "".join(chunks),
+                "usage": final_usage,
+            }
     except httpx.TimeoutException as exc:
         raise HTTPException(
             status_code=504,
