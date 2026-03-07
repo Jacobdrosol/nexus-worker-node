@@ -29,6 +29,12 @@ async def infer_stream(request: Request, body: InferStreamRequest) -> StreamingR
             getattr(request.app.state, "inference_inflight", 0) or 0
         ) + 1
         try:
+            logger.info(
+                "nexus_worker stream inference accepted provider=%s model=%s worker_id=%s",
+                body.provider,
+                body.model,
+                cfg.get("id"),
+            )
             async for event in run_inference_stream(
                 provider=body.provider,
                 model=body.model,
@@ -40,6 +46,12 @@ async def infer_stream(request: Request, body: InferStreamRequest) -> StreamingR
                 event_name = str(event.get("event") or "message")
                 payload = {k: v for k, v in event.items() if k != "event"}
                 yield f"event: {event_name}\ndata: {json.dumps(payload)}\n\n"
+            logger.info(
+                "nexus_worker stream inference completed provider=%s model=%s worker_id=%s",
+                body.provider,
+                body.model,
+                cfg.get("id"),
+            )
             yield "event: done\ndata: {}\n\n"
         except HTTPException as e:
             payload = {"error": e.detail, "status_code": e.status_code}
