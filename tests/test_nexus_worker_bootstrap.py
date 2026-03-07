@@ -74,7 +74,7 @@ async def test_bootstrap_worker_node_generates_assets(tmp_path: Path):
     if install_script.exists():
         install_text = install_script.read_text(encoding="utf-8")
         assert "WindowsIdentity" in install_text
-        assert "InteractiveToken" in install_text
+        assert "Interactive" in install_text
 
 
 async def test_bootstrap_worker_node_can_attempt_service_install_and_verify(tmp_path: Path):

@@ -219,7 +219,7 @@ def _windows_install_ps1(service_name: str, workdir: Path) -> str:
             "$CurrentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name",
             "$Action = New-ScheduledTaskAction -Execute $Command",
             "$Trigger = New-ScheduledTaskTrigger -AtLogOn -User $CurrentUser",
-            "$Principal = New-ScheduledTaskPrincipal -UserId $CurrentUser -LogonType InteractiveToken -RunLevel Limited",
+            "$Principal = New-ScheduledTaskPrincipal -UserId $CurrentUser -LogonType Interactive -RunLevel Limited",
             "Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Force",
             "Start-ScheduledTask -TaskName $TaskName",
             "",
