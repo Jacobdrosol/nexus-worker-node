@@ -134,6 +134,36 @@ async def test_nexus_worker_metrics_endpoint(nx_worker_app):
     assert "nexus_worker_http_requests_total" in resp.text
 
 
+@pytest.mark.anyio
+async def test_nexus_worker_pull_local_model(nx_worker_app):
+    class FakeResponse:
+        status_code = 200
+        text = '{"status":"success"}'
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "success"}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json=None):
+            return FakeResponse()
+
+    with patch("nexus_worker.api.models.httpx.AsyncClient", return_value=FakeClient()):
+        async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+            resp = await client.post("/models/local/pull", json={"model": "llama3.1:8b"})
+
+    assert resp.status_code == 200
+    assert resp.json()["model"] == "llama3.1:8b"
+
+
 def test_nexus_worker_auto_register_defaults_off(monkeypatch):
     monkeypatch.delenv("NEXUS_WORKER_AUTO_REGISTER", raising=False)
     assert agent._auto_register_enabled() is False
