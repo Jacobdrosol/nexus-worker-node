@@ -1,6 +1,7 @@
 import asyncio
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -53,6 +54,60 @@ async def test_nexus_worker_infer_ollama(nx_worker_app):
             )
     assert resp.status_code == 200
     assert resp.json()["output"] == "ok"
+
+
+@pytest.mark.anyio
+async def test_ollama_backend_timeout_maps_to_504():
+    from fastapi import HTTPException
+    from nexus_worker.backends import ollama_backend
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json=None):
+            raise httpx.TimeoutException("timeout")
+
+    with patch("nexus_worker.backends.ollama_backend.httpx.AsyncClient", return_value=FakeClient()):
+        with pytest.raises(HTTPException) as exc:
+            await ollama_backend.infer(
+                model="llama3.1:8b",
+                messages=[{"role": "user", "content": "hello"}],
+                params={},
+                host="http://localhost:11434",
+            )
+
+    assert exc.value.status_code == 504
+
+
+@pytest.mark.anyio
+async def test_ollama_backend_connect_error_maps_to_502():
+    from fastapi import HTTPException
+    from nexus_worker.backends import ollama_backend
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json=None):
+            raise httpx.ConnectError("refused")
+
+    with patch("nexus_worker.backends.ollama_backend.httpx.AsyncClient", return_value=FakeClient()):
+        with pytest.raises(HTTPException) as exc:
+            await ollama_backend.infer(
+                model="llama3.1:8b",
+                messages=[{"role": "user", "content": "hello"}],
+                params={},
+                host="http://localhost:11434",
+            )
+
+    assert exc.value.status_code == 502
 
 
 @pytest.mark.anyio

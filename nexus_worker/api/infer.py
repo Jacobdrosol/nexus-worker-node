@@ -37,7 +37,11 @@ async def infer(request: Request, body: InferRequest) -> dict:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("nexus_worker inference failed: %s", e)
+        logger.exception(
+            "nexus_worker inference failed provider=%s model=%s",
+            body.provider,
+            body.model,
+        )
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         request.app.state.inference_inflight = max(

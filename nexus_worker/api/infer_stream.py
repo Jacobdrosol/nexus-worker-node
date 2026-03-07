@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -8,6 +9,7 @@ from pydantic import BaseModel
 from nexus_worker.services.inference import run_inference
 
 router = APIRouter(tags=["infer"])
+logger = logging.getLogger(__name__)
 
 
 class InferStreamRequest(BaseModel):
@@ -46,6 +48,11 @@ async def infer_stream(request: Request, body: InferStreamRequest) -> StreamingR
             payload = {"error": e.detail, "status_code": e.status_code}
             yield f"event: error\ndata: {json.dumps(payload)}\n\n"
         except Exception as e:
+            logger.exception(
+                "nexus_worker stream inference failed provider=%s model=%s",
+                body.provider,
+                body.model,
+            )
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
         finally:
             request.app.state.inference_inflight = max(

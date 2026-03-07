@@ -62,6 +62,8 @@ async def run_inference(
     if provider in {"openai", "claude", "gemini"}:
         safe_messages, redacted = _cloud_context_policy(messages)
         if provider == "openai":
+            if not os.environ.get("OPENAI_API_KEY", "").strip():
+                raise HTTPException(status_code=400, detail="OPENAI_API_KEY is not configured on this worker")
             out = await openai_backend.infer(
                 model=model,
                 messages=safe_messages,
@@ -69,6 +71,8 @@ async def run_inference(
                 api_key=os.environ.get("OPENAI_API_KEY", ""),
             )
         elif provider == "claude":
+            if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+                raise HTTPException(status_code=400, detail="ANTHROPIC_API_KEY is not configured on this worker")
             out = await claude_backend.infer(
                 model=model,
                 messages=safe_messages,
@@ -76,6 +80,8 @@ async def run_inference(
                 api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
             )
         else:
+            if not os.environ.get("GEMINI_API_KEY", "").strip():
+                raise HTTPException(status_code=400, detail="GEMINI_API_KEY is not configured on this worker")
             out = await gemini_backend.infer(
                 model=model,
                 messages=safe_messages,
