@@ -13,6 +13,10 @@ def _ollama_options(params: dict) -> dict:
     return options
 
 
+def _ollama_timeout() -> httpx.Timeout:
+    return httpx.Timeout(connect=10.0, read=None, write=120.0, pool=30.0)
+
+
 async def infer(
     model: str,
     messages: list[dict],
@@ -26,7 +30,7 @@ async def infer(
         "options": _ollama_options(params),
     }
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=_ollama_timeout()) as client:
             response = await client.post(f"{host}/api/chat", json=body)
             response.raise_for_status()
             data = response.json()
@@ -75,7 +79,7 @@ async def infer_stream(
     chunks: list[str] = []
     final_usage = {"prompt_tokens": 0, "completion_tokens": 0}
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=_ollama_timeout()) as client:
             async with client.stream("POST", f"{host}/api/chat", json=body) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():

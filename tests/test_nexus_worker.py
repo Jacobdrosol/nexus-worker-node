@@ -95,6 +95,15 @@ async def test_ollama_backend_maps_max_tokens_to_num_predict():
     assert captured["json"]["options"]["temperature"] == 0.2
 
 
+def test_ollama_backend_timeout_disables_read_deadline():
+    from nexus_worker.backends import ollama_backend
+
+    timeout = ollama_backend._ollama_timeout()
+    assert timeout.connect == 10.0
+    assert timeout.read is None
+    assert timeout.write == 120.0
+
+
 @pytest.mark.anyio
 async def test_nexus_worker_infer_stream_ollama(nx_worker_app):
     async def _fake_stream(**kwargs):
