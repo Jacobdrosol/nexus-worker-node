@@ -41,7 +41,7 @@ def _run_server() -> None:
         cfg = {}
     uvicorn.run(
         agent.app,
-        host=cfg.get("host", "0.0.0.0"),
+        host=cfg.get("listen_host") or cfg.get("host", "0.0.0.0"),
         port=int(cfg.get("port", int(os.environ.get("NEXUS_WORKER_PORT", "8010")))),
         reload=False,
     )

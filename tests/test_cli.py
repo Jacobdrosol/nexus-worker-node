@@ -77,3 +77,31 @@ def test_run_server_uses_current_config_path(tmp_path, monkeypatch):
     assert captured["host"] == "0.0.0.0"
     assert captured["port"] == 8013
     assert captured["reload"] is False
+
+
+def test_run_server_prefers_listen_host_over_advertised_host(tmp_path, monkeypatch):
+    config_path = tmp_path / "worker.yaml"
+    config_path.write_text(
+        "host: worker-content\nlisten_host: 0.0.0.0\nport: 8014\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("NEXUS_WORKER_CONFIG_PATH", str(config_path))
+
+    class _DummyAgent:
+        app = object()
+
+    monkeypatch.setattr(cli.importlib, "reload", lambda module: _DummyAgent)
+    monkeypatch.setitem(__import__("sys").modules, "nexus_worker.agent", _DummyAgent)
+
+    captured: dict[str, object] = {}
+
+    def _fake_uvicorn_run(app, host, port, reload):
+        captured.update({"app": app, "host": host, "port": port, "reload": reload})
+
+    monkeypatch.setattr(cli.uvicorn, "run", _fake_uvicorn_run)
+
+    cli._run_server()
+
+    assert captured["host"] == "0.0.0.0"
+    assert captured["port"] == 8014
