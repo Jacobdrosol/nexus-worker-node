@@ -7,6 +7,7 @@ from nexus_worker.backends import (
     claude_backend,
     cli_backend,
     gemini_backend,
+    ollama_cloud_backend,
     ollama_backend,
     openai_backend,
 )
@@ -59,9 +60,15 @@ async def run_inference(
             host=str(worker_config.get("ollama_host") or "http://localhost:11434"),
         )
 
-    if provider in {"openai", "claude", "gemini"}:
+    if provider in {"openai", "claude", "gemini", "ollama_cloud"}:
         safe_messages, redacted = _cloud_context_policy(messages)
-        if provider == "openai":
+        if provider == "ollama_cloud":
+            out = await ollama_cloud_backend.infer(
+                model=model,
+                messages=safe_messages,
+                params=params,
+            )
+        elif provider == "openai":
             if not os.environ.get("OPENAI_API_KEY", "").strip():
                 raise HTTPException(status_code=400, detail="OPENAI_API_KEY is not configured on this worker")
             out = await openai_backend.infer(
@@ -113,6 +120,18 @@ async def run_inference_stream(
             params=params,
             host=str(worker_config.get("ollama_host") or "http://localhost:11434"),
         ):
+            yield event
+        return
+
+    if provider == "ollama_cloud":
+        safe_messages, redacted = _cloud_context_policy(messages)
+        async for event in ollama_cloud_backend.infer_stream(
+            model=model,
+            messages=safe_messages,
+            params=params,
+        ):
+            if redacted:
+                event["policy_context_redacted"] = True
             yield event
         return
 

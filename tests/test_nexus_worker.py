@@ -58,6 +58,111 @@ async def test_nexus_worker_infer_ollama(nx_worker_app):
 
 
 @pytest.mark.anyio
+async def test_nexus_worker_infer_ollama_cloud(nx_worker_app, monkeypatch):
+    monkeypatch.setenv("OLLAMA_API_KEY", "test-key")
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        with patch(
+            "nexus_worker.services.inference.ollama_cloud_backend.infer",
+            new=AsyncMock(return_value={"output": "cloud-ok", "usage": {}}),
+        ) as mock_infer:
+            resp = await client.post(
+                "/infer",
+                json={
+                    "model": "glm-5.2:cloud",
+                    "provider": "ollama_cloud",
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+            )
+
+    assert resp.status_code == 200
+    assert resp.json()["output"] == "cloud-ok"
+    mock_infer.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_nexus_worker_ollama_cloud_redacts_context(nx_worker_app, monkeypatch):
+    monkeypatch.setenv("NEXUS_WORKER_CLOUD_CONTEXT_POLICY", "redact")
+    captured = {}
+
+    async def _fake_infer(**kwargs):
+        captured.update(kwargs)
+        return {"output": "ok", "usage": {}}
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        with patch("nexus_worker.services.inference.ollama_cloud_backend.infer", new=_fake_infer):
+            resp = await client.post(
+                "/infer",
+                json={
+                    "model": "glm-5.2:cloud",
+                    "provider": "ollama_cloud",
+                    "messages": [{"role": "system", "content": "Context:\nprivate"}],
+                },
+            )
+
+    assert resp.status_code == 200
+    assert resp.json()["policy_context_redacted"] is True
+    assert captured["messages"][0]["content"] == "Context:\n[REDACTED_BY_POLICY]"
+
+
+@pytest.mark.anyio
+async def test_ollama_cloud_backend_requires_api_key(monkeypatch):
+    from fastapi import HTTPException
+    from nexus_worker.backends import ollama_cloud_backend
+
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    with pytest.raises(HTTPException) as exc:
+        await ollama_cloud_backend.infer(
+            model="glm-5.2:cloud",
+            messages=[{"role": "user", "content": "hello"}],
+            params={},
+        )
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_ollama_cloud_backend_maps_max_tokens_to_num_predict(monkeypatch):
+    from nexus_worker.backends import ollama_cloud_backend
+
+    monkeypatch.setenv("OLLAMA_API_KEY", "test-key")
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": "ok"}, "prompt_eval_count": 1, "eval_count": 2}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            return FakeResponse()
+
+    with patch("nexus_worker.backends.ollama_cloud_backend.httpx.AsyncClient", return_value=FakeClient()):
+        result = await ollama_cloud_backend.infer(
+            model="glm-5.2:cloud",
+            messages=[{"role": "user", "content": "hello"}],
+            params={"max_tokens": 128},
+        )
+
+    assert result["output"] == "ok"
+    assert captured["url"] == "https://ollama.com/api/chat"
+    assert captured["headers"]["Authorization"] == "Bearer test-key"
+    assert captured["json"]["options"]["num_predict"] == 128
+    assert "max_tokens" not in captured["json"]["options"]
+
+
+@pytest.mark.anyio
 async def test_ollama_backend_maps_max_tokens_to_num_predict():
     from nexus_worker.backends import ollama_backend
 
