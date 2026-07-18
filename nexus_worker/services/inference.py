@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Any, AsyncGenerator, Dict, List, Tuple
 
@@ -42,6 +43,31 @@ def _cloud_context_policy(messages: List[Dict[str, Any]]) -> Tuple[List[Dict[str
         else:
             redacted.append(m)
     return redacted, True
+
+
+def _configured_cli_tools(worker_config: Dict[str, Any]) -> set[str]:
+    tooling = worker_config.get("tooling")
+    if not isinstance(tooling, dict):
+        return set()
+    raw_tools = tooling.get("cli_tools")
+    if not isinstance(raw_tools, list):
+        return set()
+    return {str(tool).strip() for tool in raw_tools if str(tool).strip()}
+
+
+def _cli_input(messages: List[Dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "user").strip() or "user"
+        content = message.get("content")
+        if isinstance(content, str):
+            rendered_content = content
+        else:
+            rendered_content = json.dumps(content, ensure_ascii=False)
+        parts.append(f"{role}:\n{rendered_content}")
+    return "\n\n".join(parts)
 
 
 async def run_inference(
@@ -100,7 +126,18 @@ async def run_inference(
         return out
 
     if provider == "cli":
-        return await cli_backend.infer(command=command or model, params=params)
+        allowed_tools = _configured_cli_tools(worker_config)
+        if not allowed_tools:
+            raise HTTPException(status_code=403, detail="No CLI tools are enabled on this worker")
+        try:
+            return await cli_backend.infer(
+                command=command or model,
+                params=params,
+                allowed_tools=allowed_tools,
+                input_text=_cli_input(messages),
+            )
+        except cli_backend.CLIExecutionRejected as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
 

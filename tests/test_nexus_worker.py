@@ -58,6 +58,53 @@ async def test_nexus_worker_infer_ollama(nx_worker_app):
 
 
 @pytest.mark.anyio
+async def test_nexus_worker_rejects_cli_without_declared_tooling(nx_worker_app):
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        with patch("nexus_worker.services.inference.cli_backend.infer", new=AsyncMock()) as mock_infer:
+            resp = await client.post(
+                "/infer",
+                json={
+                    "model": "claude",
+                    "provider": "cli",
+                    "messages": [],
+                },
+            )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "No CLI tools are enabled on this worker"
+    mock_infer.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_nexus_worker_runs_only_declared_cli_tool(nx_worker_app):
+    nx_worker_app.state.worker_config["tooling"] = {"cli_tools": ["claude"]}
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        with patch(
+            "nexus_worker.services.inference.cli_backend.infer",
+            new=AsyncMock(return_value={"output": "ok", "usage": {}}),
+        ) as mock_infer:
+            resp = await client.post(
+                "/infer",
+                json={
+                    "model": "claude",
+                    "provider": "cli",
+                    "command": "claude -p 'review this change'",
+                    "messages": [{"role": "user", "content": "Review the worker change."}],
+                },
+            )
+
+    assert resp.status_code == 200
+    assert resp.json()["output"] == "ok"
+    mock_infer.assert_awaited_once_with(
+        command="claude -p 'review this change'",
+        params={},
+        allowed_tools={"claude"},
+        input_text="user:\nReview the worker change.",
+    )
+
+
+@pytest.mark.anyio
 async def test_nexus_worker_infer_ollama_cloud(nx_worker_app, monkeypatch):
     monkeypatch.setenv("OLLAMA_API_KEY", "test-key")
 

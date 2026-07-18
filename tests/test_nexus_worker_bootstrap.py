@@ -12,16 +12,20 @@ from nexus_worker.manager.cli_tools import discover_cli_tools
 
 
 def test_discover_cli_tools_reports_metadata():
-    with patch("nexus_worker.manager.cli_tools.shutil.which", side_effect=lambda name: f"/usr/bin/{name}" if name in {"codex", "git"} else None):
+    with patch("nexus_worker.manager.cli_tools.shutil.which", side_effect=lambda name: f"/usr/bin/{name}" if name in {"claude", "codex", "git"} else None):
         with patch("nexus_worker.manager.cli_tools._read_version", side_effect=lambda command, version_args: f"{command} 1.0"):
             tools = discover_cli_tools()
 
     names = {tool["name"] for tool in tools}
+    assert "claude" in names
     assert "codex" in names
     assert "git" in names
     codex = next(tool for tool in tools if tool["name"] == "codex")
     assert codex["requires_approval"] is True
     assert codex["approval_hints"]
+    claude = next(tool for tool in tools if tool["name"] == "claude")
+    assert claude["requires_approval"] is True
+    assert claude["approval_hints"]
 
 
 async def test_bootstrap_worker_node_generates_assets(tmp_path: Path):

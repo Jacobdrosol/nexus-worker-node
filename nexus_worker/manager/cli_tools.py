@@ -8,6 +8,15 @@ from typing import Any, Dict, List
 
 _KNOWN_CLI_TOOLS: list[dict[str, Any]] = [
     {
+        "name": "claude",
+        "version_args": ["--version"],
+        "requires_approval": True,
+        "approval_hints": [
+            "Authenticate Claude Code or configure its node-local gateway credentials before enabling tasks.",
+            "When using a gateway-backed model, configure the gateway and model selection only in the worker node environment.",
+        ],
+    },
+    {
         "name": "codex",
         "version_args": ["--version"],
         "requires_approval": True,
@@ -100,4 +109,3 @@ def discover_cli_tools() -> list[dict[str, Any]]:
             }
         )
     return discovered
-
