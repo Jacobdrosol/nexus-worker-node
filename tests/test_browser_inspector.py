@@ -13,6 +13,7 @@ def test_browser_scope_accepts_exact_and_prefix_paths():
     allowed = ["/admin/courses", "/admin/lessons/*"]
 
     assert ensure_allowed_path("/admin/courses", allowed) == "/admin/courses"
+    assert ensure_allowed_path("/admin/lessons", allowed) == "/admin/lessons"
     assert ensure_allowed_path("/admin/lessons/42", allowed) == "/admin/lessons/42"
 
 
@@ -36,6 +37,8 @@ def test_browser_scope_rejects_unsafe_paths(path):
 def test_browser_scope_rejects_paths_outside_allowed_scope():
     with pytest.raises(BrowserScopeError, match="outside"):
         ensure_allowed_path("/admin/users", ["/admin/courses"])
+    with pytest.raises(BrowserScopeError, match="outside"):
+        ensure_allowed_path("/admin/courses-admin", ["/admin/courses/*"])
 
 
 def test_browser_scope_joins_only_to_configured_origin():

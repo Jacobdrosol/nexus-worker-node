@@ -43,7 +43,11 @@ def ensure_allowed_path(path: str, allowed_paths: Any) -> str:
         raise BrowserScopeError("Browser inspection has no configured path scope")
     for allowed in allowed_paths:
         allowed_path, is_prefix = _normalized_allowed_path(allowed)
-        if normalized == allowed_path or (is_prefix and normalized.startswith(allowed_path)):
+        prefix_root = allowed_path.rstrip("/")
+        if normalized == allowed_path or (
+            is_prefix
+            and (normalized == prefix_root or normalized.startswith(allowed_path))
+        ):
             return normalized
     raise BrowserScopeError("Browser inspection path is outside the configured scope")
 
