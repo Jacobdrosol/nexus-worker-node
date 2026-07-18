@@ -48,7 +48,7 @@ def _hostname() -> str:
     return socket.gethostname() or "localhost"
 
 
-def _build_capabilities(local_models: dict[str, Any], cli_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_capabilities(local_models: dict[str, Any]) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str], set[str]] = {}
     for item in local_models.get("models", []):
         provider = str(item.get("provider") or "").strip()
@@ -56,8 +56,6 @@ def _build_capabilities(local_models: dict[str, Any], cli_tools: list[dict[str, 
         if not provider or not name:
             continue
         grouped.setdefault(("llm", provider), set()).add(name)
-    if cli_tools:
-        grouped.setdefault(("tool", "cli"), set()).update(tool["name"] for tool in cli_tools if tool.get("name"))
     out: list[dict[str, Any]] = []
     for (cap_type, provider), models in sorted(grouped.items()):
         out.append(
@@ -78,7 +76,6 @@ def _build_worker_config(
     port: int,
     ollama_host: str,
     local_models: dict[str, Any],
-    cli_tools: list[dict[str, Any]],
     control_plane_url: str,
 ) -> dict[str, Any]:
     return {
@@ -90,8 +87,8 @@ def _build_worker_config(
         "enabled": True,
         "ollama_host": ollama_host,
         "control_plane_url": control_plane_url,
-        "capabilities": _build_capabilities(local_models, cli_tools),
-        "cli_tools": cli_tools,
+        "capabilities": _build_capabilities(local_models),
+        "tooling": {"cli_tools": []},
         "metrics": {},
     }
 
@@ -405,7 +402,6 @@ async def bootstrap_worker_node(args: argparse.Namespace) -> dict[str, Any]:
         port=port,
         ollama_host=args.ollama_host,
         local_models=local_models,
-        cli_tools=cli_tools,
         control_plane_url=args.control_plane_url,
     )
 

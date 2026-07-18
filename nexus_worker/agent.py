@@ -9,8 +9,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from nexus_worker.api import capabilities, health, infer, infer_stream, models
+from nexus_worker.capability_attestation import attest_worker_capabilities
 from nexus_worker.config_loader import ConfigLoader
 from nexus_worker.hardware.detector import detect_hardware_profile
+from nexus_worker.manager.cli_tools import discover_cli_tools
 from nexus_worker.observability import install_observability
 
 logger = logging.getLogger(__name__)
@@ -77,6 +79,13 @@ async def lifespan(app: FastAPI):
             "metrics": {},
         }
 
+    declared_worker_config = worker_config
+    worker_config, capability_attestation = attest_worker_capabilities(
+        declared_worker_config,
+        discover_cli_tools(),
+    )
+    app.state.declared_worker_config = declared_worker_config
+    app.state.capability_attestation = capability_attestation
     app.state.worker_config = worker_config
     worker_id = worker_config.get("id", "nexus-worker-standalone")
     control_plane_url = _control_plane_url()

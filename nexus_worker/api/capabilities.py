@@ -11,6 +11,8 @@ router = APIRouter(tags=["capabilities"])
 @router.get("/capabilities")
 async def capabilities(request: Request) -> dict:
     cfg = getattr(request.app.state, "worker_config", {})
+    declared_cfg = getattr(request.app.state, "declared_worker_config", cfg)
+    attestation = getattr(request.app.state, "capability_attestation", {})
     hardware = detect_hardware_profile()
     local = await discover_local_models(cfg)
     cli_tools = discover_cli_tools()
@@ -27,6 +29,8 @@ async def capabilities(request: Request) -> dict:
     return {
         "worker_id": cfg.get("id", "unknown"),
         "configured_capabilities": cfg.get("capabilities", []),
+        "declared_capabilities": declared_cfg.get("capabilities", []),
+        "capability_attestation": attestation,
         "hardware_profile": hardware,
         "local_models": local,
         "cli_tools": cli_tools,

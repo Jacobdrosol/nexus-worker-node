@@ -36,6 +36,33 @@ async def test_nexus_worker_health(nx_worker_app):
         resp = await client.get("/health")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+    assert resp.json()["enabled_cli_tools"] == []
+
+
+@pytest.mark.anyio
+async def test_worker_startup_attests_capabilities_before_registration(monkeypatch):
+    app = FastAPI()
+    monkeypatch.setenv("NEXUS_WORKER_AUTO_REGISTER", "0")
+    declared = {
+        "id": "nx-attested",
+        "name": "Attested Worker",
+        "capabilities": [
+            {"type": "llm", "provider": "ollama_cloud", "models": ["glm-5.2:cloud"]},
+            {"type": "tool", "provider": "cli", "models": ["codex"]},
+        ],
+        "tooling": {"cli_tools": ["codex", "claude"]},
+    }
+    with patch("nexus_worker.agent.ConfigLoader.load_yaml", return_value=declared), patch(
+        "nexus_worker.agent.discover_cli_tools",
+        return_value=[{"name": "codex", "path": "/usr/local/bin/codex"}],
+    ):
+        async with agent.lifespan(app):
+            assert app.state.worker_config["capabilities"] == [
+                {"type": "llm", "provider": "ollama_cloud", "models": ["glm-5.2:cloud"]},
+                {"type": "tool", "provider": "cli", "models": ["codex"]},
+            ]
+            assert app.state.worker_config["tooling"]["cli_tools"] == ["codex"]
+            assert app.state.capability_attestation["unavailable_cli_tools"] == ["claude"]
 
 
 @pytest.mark.anyio

@@ -7,6 +7,8 @@ from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 from nexus_worker.bootstrap import bootstrap_worker_node
 from nexus_worker.manager.cli_tools import discover_cli_tools
 
@@ -61,10 +63,12 @@ async def test_bootstrap_worker_node_generates_assets(tmp_path: Path):
     assert env_path.exists()
     assert summary_path.exists()
 
-    config_text = config_path.read_text(encoding="utf-8")
-    assert "worker-01" in config_text
-    assert "codex" in config_text
-    assert "llama3.1:8b" in config_text
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert config["id"] == "worker-01"
+    assert config["tooling"]["cli_tools"] == []
+    assert config["capabilities"] == [
+        {"type": "llm", "provider": "ollama", "models": ["llama3.1:8b"]}
+    ]
 
     env_text = env_path.read_text(encoding="utf-8")
     assert "CONTROL_PLANE_URL=http://control-plane:8000" in env_text
@@ -72,6 +76,7 @@ async def test_bootstrap_worker_node_generates_assets(tmp_path: Path):
     assert "NEXUS_WORKER_AUTO_REGISTER=0" in env_text
 
     summary_json = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary_json["discovered_cli_tools"][0]["name"] == "codex"
     assert summary_json["service_name"].startswith("nexus-worker-worker-01")
     assert summary_json["manual_run_command"]
     install_script = tmp_path / "install-service.ps1"

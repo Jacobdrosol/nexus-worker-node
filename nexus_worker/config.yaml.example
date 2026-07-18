@@ -10,5 +10,6 @@ capabilities:
     provider: ollama
     models:
       - llama3.1:8b
-cli_tools: []
+tooling:
+  cli_tools: []
 metrics: {}
