@@ -301,6 +301,58 @@ async def test_ollama_cloud_backend_maps_max_tokens_to_num_predict(monkeypatch):
     assert "max_tokens" not in captured["json"]["options"]
 
 
+@pytest.mark.anyio
+async def test_ollama_cloud_backend_removes_reasoning_markup(monkeypatch):
+    from nexus_worker.backends import ollama_cloud_backend
+
+    monkeypatch.setenv("OLLAMA_API_KEY", "test-key")
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "message": {"content": "<think>internal analysis</think>Draft patch</think>"},
+                "prompt_eval_count": 1,
+                "eval_count": 2,
+            }
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            return FakeResponse()
+
+    with patch("nexus_worker.backends.ollama_cloud_backend.httpx.AsyncClient", return_value=FakeClient()):
+        result = await ollama_cloud_backend.infer(
+            model="glm-5.2:cloud",
+            messages=[{"role": "user", "content": "hello"}],
+            params={},
+        )
+
+    assert result["output"] == "Draft patch"
+
+
+def test_ollama_cloud_stream_filter_suppresses_split_reasoning_tags():
+    from nexus_worker.backends.ollama_cloud_backend import _VisibleOutputFilter
+
+    output = _VisibleOutputFilter()
+    parts = [
+        output.feed("<thi"),
+        output.feed("nk>internal"),
+        output.feed(" analysis</thi"),
+        output.feed("nk>Draft patch"),
+        output.finish(),
+    ]
+
+    assert "".join(parts) == "Draft patch"
+
+
 def test_ollama_cloud_chat_body_allows_explicit_thinking():
     from nexus_worker.backends.ollama_cloud_backend import _chat_body
 
