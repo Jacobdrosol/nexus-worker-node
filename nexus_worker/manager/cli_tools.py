@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from typing import Any, Dict, List
 
 
@@ -104,6 +107,9 @@ def _authentication_state(command: str, tool: Dict[str, Any]) -> str:
 
     if not bool(tool.get("requires_authentication", False)):
         return "not_required"
+    gateway_state = _claude_gateway_authentication_state(command)
+    if gateway_state is not None:
+        return gateway_state
     args = [str(arg) for arg in tool.get("auth_check_args", []) if str(arg).strip()]
     if not args:
         return "unknown"
@@ -134,6 +140,39 @@ def _authentication_state(command: str, tool: Dict[str, Any]) -> str:
     if proc.returncode == 0:
         return "authenticated"
     return "unknown"
+
+
+def _claude_gateway_authentication_state(command: str) -> str | None:
+    """Attest an explicitly configured private Claude gateway without exposing its token.
+
+    Claude Code can use an Anthropic-compatible gateway instead of a vendor login.
+    This path is opt-in and verifies the gateway's non-secret health response before
+    treating the CLI as authenticated. A mere environment variable is never enough
+    to enable the tool.
+    """
+
+    if command != "claude":
+        return None
+    enabled = os.environ.get("NEXUS_CLAUDE_GATEWAY_ATTESTATION", "").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        return None
+    base_url = os.environ.get("ANTHROPIC_BASE_URL", "").strip().rstrip("/")
+    token = os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip()
+    if not base_url or not token:
+        return "not_authenticated"
+    try:
+        request = urllib.request.Request(
+            f"{base_url}/health",
+            headers={"X-Api-Key": token},
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 - operator-controlled endpoint
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError, urllib.error.URLError):
+        return "not_authenticated"
+    if isinstance(payload, dict) and payload.get("status") == "ok" and payload.get("ready") is True:
+        return "authenticated"
+    return "not_authenticated"
 
 
 def discover_cli_tools() -> list[dict[str, Any]]:
