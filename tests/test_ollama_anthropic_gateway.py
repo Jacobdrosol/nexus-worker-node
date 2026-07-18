@@ -62,6 +62,22 @@ def test_rejects_tool_result_without_known_tool_use():
         )
 
 
+def test_translates_developer_messages_to_ollama_system_messages():
+    messages = gateway._anthropic_messages_to_ollama(
+        {
+            "messages": [
+                {"role": "developer", "content": "Use the configured repository only."},
+                {"role": "user", "content": "Review this change."},
+            ]
+        }
+    )
+
+    assert messages == [
+        {"role": "system", "content": "Use the configured repository only."},
+        {"role": "user", "content": "Review this change."},
+    ]
+
+
 def test_translates_ollama_tool_calls_to_anthropic_response(monkeypatch):
     monkeypatch.setenv("NEXUS_OLLAMA_CLAUDE_GATEWAY_MODEL", "glm-5.2:cloud")
     response = gateway._anthropic_response(

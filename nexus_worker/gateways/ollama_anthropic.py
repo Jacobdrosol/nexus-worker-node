@@ -169,9 +169,18 @@ def _anthropic_messages_to_ollama(payload: dict[str, Any]) -> list[dict[str, Any
         if not isinstance(raw_message, dict):
             raise HTTPException(status_code=400, detail="Claude gateway message must be an object")
         role = str(raw_message.get("role") or "").strip().lower()
-        if role not in {"user", "assistant"}:
-            raise HTTPException(status_code=400, detail="Claude gateway message role is unsupported")
+        if role not in {"user", "assistant", "system", "developer"}:
+            raise HTTPException(status_code=400, detail=f"Claude gateway message role is unsupported: {role or 'missing'}")
         blocks = _content_blocks(raw_message.get("content"))
+        if role in {"system", "developer"}:
+            system_content = "\n".join(
+                str(block.get("text") or "")
+                for block in blocks
+                if str(block.get("type") or "text").strip().lower() == "text"
+            ).strip()
+            if system_content:
+                messages.append({"role": "system", "content": system_content})
+            continue
         text_parts: list[str] = []
         tool_calls: list[dict[str, Any]] = []
         tool_results: list[dict[str, Any]] = []
