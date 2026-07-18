@@ -92,7 +92,13 @@ async def lifespan(app: FastAPI):
         }
 
     declared_worker_config = worker_config
-    browser_attestation = attest_browser_runtime(declared_worker_config)
+    # Playwright's synchronous driver cannot run on FastAPI's event-loop thread.
+    # The startup probe is bounded and has no browser interaction, so run it in a
+    # worker thread before registering the effective capability set.
+    browser_attestation = await asyncio.to_thread(
+        attest_browser_runtime,
+        declared_worker_config,
+    )
     worker_config, capability_attestation = attest_worker_capabilities(
         declared_worker_config,
         discover_cli_tools(),
