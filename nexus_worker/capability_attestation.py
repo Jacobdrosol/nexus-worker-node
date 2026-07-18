@@ -28,6 +28,32 @@ def _installed_cli_tools(discovered_tools: Iterable[dict[str, Any]]) -> set[str]
     }
 
 
+def _auth_required_cli_tools(discovered_tools: Iterable[dict[str, Any]]) -> set[str]:
+    return {
+        _tool_name(tool.get("name"))
+        for tool in discovered_tools
+        if isinstance(tool, dict)
+        and _tool_name(tool.get("name"))
+        and bool(tool.get("requires_authentication", False))
+    }
+
+
+def _authenticated_cli_tools(discovered_tools: Iterable[dict[str, Any]]) -> set[str]:
+    authenticated: set[str] = set()
+    for tool in discovered_tools:
+        if not isinstance(tool, dict):
+            continue
+        name = _tool_name(tool.get("name"))
+        if not name:
+            continue
+        if not bool(tool.get("requires_authentication", False)):
+            authenticated.add(name)
+            continue
+        if _tool_name(tool.get("authentication_state")) == "authenticated":
+            authenticated.add(name)
+    return authenticated
+
+
 def _is_tool_capability(capability: Any) -> bool:
     return isinstance(capability, dict) and str(capability.get("type") or "").strip().casefold() == "tool"
 
@@ -52,9 +78,15 @@ def attest_worker_capabilities(
         configured_capabilities = []
 
     allowed_cli_tools = _configured_cli_tools(declared)
-    installed_cli_tools = _installed_cli_tools(discovered_tools)
-    enabled_cli_tools = sorted(allowed_cli_tools & installed_cli_tools)
+    discovered = [tool for tool in discovered_tools if isinstance(tool, dict)]
+    installed_cli_tools = _installed_cli_tools(discovered)
+    auth_required_cli_tools = _auth_required_cli_tools(discovered)
+    authenticated_cli_tools = _authenticated_cli_tools(discovered)
+    enabled_cli_tools = sorted(allowed_cli_tools & installed_cli_tools & authenticated_cli_tools)
     unavailable_cli_tools = sorted(allowed_cli_tools - installed_cli_tools)
+    unauthenticated_cli_tools = sorted(
+        allowed_cli_tools & installed_cli_tools & auth_required_cli_tools - authenticated_cli_tools
+    )
 
     effective = deepcopy(declared)
     # Tool capabilities must be attested by a runtime implementation. Do not let a
@@ -94,6 +126,8 @@ def attest_worker_capabilities(
         "installed_cli_tools": sorted(installed_cli_tools),
         "enabled_cli_tools": enabled_cli_tools,
         "unavailable_cli_tools": unavailable_cli_tools,
+        "auth_required_cli_tools": sorted(allowed_cli_tools & auth_required_cli_tools),
+        "unauthenticated_cli_tools": unauthenticated_cli_tools,
         "discarded_declared_tool_capabilities": sum(
             1 for capability in configured_capabilities if _is_tool_capability(capability)
         ),

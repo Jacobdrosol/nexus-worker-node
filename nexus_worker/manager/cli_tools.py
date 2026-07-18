@@ -1,6 +1,7 @@
 """CLI tool discovery helpers for nexus_worker."""
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from typing import Any, Dict, List
@@ -15,6 +16,8 @@ _KNOWN_CLI_TOOLS: list[dict[str, Any]] = [
             "Authenticate Claude Code or configure its node-local gateway credentials before enabling tasks.",
             "When using a gateway-backed model, configure the gateway and model selection only in the worker node environment.",
         ],
+        "requires_authentication": True,
+        "auth_check_args": ["auth", "status"],
     },
     {
         "name": "codex",
@@ -24,6 +27,8 @@ _KNOWN_CLI_TOOLS: list[dict[str, Any]] = [
             "Run `codex login` on the worker node before enabling write-capable tasks.",
             "Review repository trust and sandbox settings before routing coding tasks here.",
         ],
+        "requires_authentication": True,
+        "auth_check_args": ["login", "status"],
     },
     {
         "name": "gh",
@@ -32,6 +37,8 @@ _KNOWN_CLI_TOOLS: list[dict[str, Any]] = [
         "approval_hints": [
             "Run `gh auth login` or configure a GitHub token before using repository workflows.",
         ],
+        "requires_authentication": True,
+        "auth_check_args": ["auth", "status"],
     },
     {
         "name": "git",
@@ -92,6 +99,43 @@ def _read_version(command: str, version_args: list[str]) -> str | None:
     return first_line[:200]
 
 
+def _authentication_state(command: str, tool: Dict[str, Any]) -> str:
+    """Return a non-secret authentication state for CLIs that require credentials."""
+
+    if not bool(tool.get("requires_authentication", False)):
+        return "not_required"
+    args = [str(arg) for arg in tool.get("auth_check_args", []) if str(arg).strip()]
+    if not args:
+        return "unknown"
+    try:
+        proc = subprocess.run(
+            [command, *args],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+    except Exception:
+        return "unknown"
+
+    output = "\n".join(part for part in (proc.stdout, proc.stderr) if part).strip()
+    if command == "claude":
+        try:
+            payload = json.loads(proc.stdout or "{}")
+            if isinstance(payload, dict) and payload.get("loggedIn") is True:
+                return "authenticated"
+            if isinstance(payload, dict) and payload.get("loggedIn") is False:
+                return "not_authenticated"
+        except (TypeError, ValueError):
+            pass
+    normalized = output.lower()
+    if "not logged in" in normalized or "loggedin\": false" in normalized:
+        return "not_authenticated"
+    if proc.returncode == 0:
+        return "authenticated"
+    return "unknown"
+
+
 def discover_cli_tools() -> list[dict[str, Any]]:
     """Return detected CLI tools and their approval metadata."""
     discovered: list[dict[str, Any]] = []
@@ -99,12 +143,15 @@ def discover_cli_tools() -> list[dict[str, Any]]:
         path = shutil.which(str(tool["name"]))
         if not path:
             continue
+        authentication_state = _authentication_state(str(tool["name"]), tool)
         discovered.append(
             {
                 "name": tool["name"],
                 "path": path,
                 "version": _read_version(str(tool["name"]), list(tool.get("version_args") or ["--version"])),
                 "requires_approval": bool(tool.get("requires_approval", False)),
+                "requires_authentication": bool(tool.get("requires_authentication", False)),
+                "authentication_state": authentication_state,
                 "approval_hints": list(tool.get("approval_hints") or []),
             }
         )

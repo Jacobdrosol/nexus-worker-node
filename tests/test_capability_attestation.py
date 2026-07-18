@@ -27,6 +27,8 @@ def test_attestation_registers_only_explicitly_enabled_installed_cli_tools():
         "installed_cli_tools": ["codex", "git"],
         "enabled_cli_tools": ["codex"],
         "unavailable_cli_tools": ["missing-cli"],
+        "auth_required_cli_tools": [],
+        "unauthenticated_cli_tools": [],
         "discarded_declared_tool_capabilities": 2,
         "browser": {"configured": False, "ready": False},
     }
@@ -41,6 +43,28 @@ def test_attestation_does_not_enable_discovered_tools_without_policy():
     assert effective["capabilities"] == []
     assert effective["tooling"]["cli_tools"] == []
     assert report["enabled_cli_tools"] == []
+
+
+def test_attestation_blocks_cli_tools_that_require_authentication_until_ready():
+    effective, report = attest_worker_capabilities(
+        {
+            "capabilities": [{"type": "tool", "provider": "cli", "models": ["codex"]}],
+            "tooling": {"cli_tools": ["codex"]},
+        },
+        [
+            {
+                "name": "codex",
+                "path": "/usr/local/bin/codex",
+                "requires_authentication": True,
+                "authentication_state": "not_authenticated",
+            }
+        ],
+    )
+
+    assert effective["capabilities"] == []
+    assert effective["tooling"]["cli_tools"] == []
+    assert report["auth_required_cli_tools"] == ["codex"]
+    assert report["unauthenticated_cli_tools"] == ["codex"]
 
 
 def test_attestation_adds_browser_only_after_runtime_proof():
