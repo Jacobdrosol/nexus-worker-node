@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import importlib
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -103,6 +104,28 @@ def _install_service_command(args: argparse.Namespace) -> None:
     raise SystemExit(raise_code)
 
 
+def _browser_login_command(args: argparse.Namespace) -> None:
+    env_file = args.env_file
+    if env_file is None and Path(_default_env_file()).exists():
+        env_file = _default_env_file()
+    _load_runtime_env(env_file, override=True)
+    generated_env = _generated_env_file()
+    if Path(generated_env).exists():
+        _load_runtime_env(generated_env, override=True)
+
+    from nexus_worker.browser.session_bootstrap import bootstrap_browser_session
+
+    try:
+        worker_config = ConfigLoader.load_yaml(_current_config_path())
+    except Exception as exc:
+        raise SystemExit(f"Unable to load worker configuration: {exc}") from exc
+    try:
+        result = bootstrap_browser_session(worker_config)
+    except Exception as exc:
+        raise SystemExit(f"Browser session bootstrap failed: {exc}") from exc
+    print(json.dumps(result, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Standalone Nexus Worker CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -132,6 +155,17 @@ def main() -> None:
     install_parser = subparsers.add_parser("install-service", help="Install the generated background service.")
     install_parser.add_argument("--output-dir", default="generated/worker-node", help="Directory containing generated service assets.")
     install_parser.set_defaults(func=_install_service_command)
+
+    browser_login_parser = subparsers.add_parser(
+        "browser-login",
+        help="Perform an explicit one-time browser login for a configured persistent profile.",
+    )
+    browser_login_parser.add_argument(
+        "--env-file",
+        default=None,
+        help="Optional private env file containing the configured login credentials.",
+    )
+    browser_login_parser.set_defaults(func=_browser_login_command)
 
     args = parser.parse_args()
     if not args.command:
