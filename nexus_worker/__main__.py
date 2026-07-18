@@ -126,6 +126,19 @@ def _browser_login_command(args: argparse.Namespace) -> None:
     print(json.dumps(result, indent=2))
 
 
+def _ollama_claude_gateway_command(args: argparse.Namespace) -> None:
+    if args.env_file:
+        _load_runtime_env(args.env_file, override=True)
+    from nexus_worker.gateways.ollama_anthropic import create_app
+
+    uvicorn.run(
+        create_app(),
+        host=args.host or os.environ.get("NEXUS_OLLAMA_CLAUDE_GATEWAY_HOST", "0.0.0.0"),
+        port=int(args.port or os.environ.get("NEXUS_OLLAMA_CLAUDE_GATEWAY_PORT", "8081")),
+        reload=False,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Standalone Nexus Worker CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -166,6 +179,15 @@ def main() -> None:
         help="Optional private env file containing the configured login credentials.",
     )
     browser_login_parser.set_defaults(func=_browser_login_command)
+
+    gateway_parser = subparsers.add_parser(
+        "ollama-claude-gateway",
+        help="Run the private Anthropic Messages gateway backed by Ollama Cloud.",
+    )
+    gateway_parser.add_argument("--env-file", default=None, help="Optional private env file to load before starting.")
+    gateway_parser.add_argument("--host", default="", help="Gateway listen host.")
+    gateway_parser.add_argument("--port", default=0, type=int, help="Gateway listen port.")
+    gateway_parser.set_defaults(func=_ollama_claude_gateway_command)
 
     args = parser.parse_args()
     if not args.command:
