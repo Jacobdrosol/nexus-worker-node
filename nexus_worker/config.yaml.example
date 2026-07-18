@@ -12,4 +12,13 @@ capabilities:
       - llama3.1:8b
 tooling:
   cli_tools: []
+  browser:
+    enabled: false
+    base_url: https://example.invalid
+    allowed_paths:
+      - /admin/*
+    user_data_dir: /var/lib/nexus-worker/browser-profile
+    request_token_env: NEXUS_BROWSER_WORKER_TOKEN
+    headless: true
+    timeout_seconds: 30000
 metrics: {}

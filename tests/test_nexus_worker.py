@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from nexus_worker import agent
-from nexus_worker.api import capabilities, health, infer, infer_stream, models
+from nexus_worker.api import browser, capabilities, health, infer, infer_stream, models
 from nexus_worker.observability import install_observability
 
 
@@ -21,6 +21,7 @@ def nx_worker_app():
     app.include_router(models.router)
     app.include_router(infer.router)
     app.include_router(infer_stream.router)
+    app.include_router(browser.router)
     app.state.worker_config = {
         "id": "nx1",
         "name": "Nexus Worker",
@@ -37,6 +38,7 @@ async def test_nexus_worker_health(nx_worker_app):
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
     assert resp.json()["enabled_cli_tools"] == []
+    assert resp.json()["browser_ready"] is False
 
 
 @pytest.mark.anyio
@@ -63,6 +65,7 @@ async def test_worker_startup_attests_capabilities_before_registration(monkeypat
             ]
             assert app.state.worker_config["tooling"]["cli_tools"] == ["codex"]
             assert app.state.capability_attestation["unavailable_cli_tools"] == ["claude"]
+            assert app.state.browser_attestation == {"configured": False, "ready": False}
 
 
 @pytest.mark.anyio
@@ -100,6 +103,67 @@ async def test_nexus_worker_rejects_cli_without_declared_tooling(nx_worker_app):
     assert resp.status_code == 403
     assert resp.json()["detail"] == "No CLI tools are enabled on this worker"
     mock_infer.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_nexus_worker_rejects_browser_without_attested_runtime(nx_worker_app):
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        resp = await client.post("/browser/inspect", json={"path": "/admin/courses"})
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "Read-only browser tooling is not available on this worker"
+
+
+@pytest.mark.anyio
+async def test_nexus_worker_rejects_browser_inspection_without_request_token(nx_worker_app, monkeypatch):
+    nx_worker_app.state.browser_runtime_config = {
+        "enabled": True,
+        "base_url": "https://example.test",
+        "allowed_paths": ["/admin/*"],
+        "user_data_dir": "/private/profile",
+        "request_token_env": "NEXUS_BROWSER_WORKER_TOKEN",
+    }
+    nx_worker_app.state.browser_attestation = {"configured": True, "ready": True, "browser": "chromium"}
+    monkeypatch.setenv("NEXUS_BROWSER_WORKER_TOKEN", "node-secret")
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        resp = await client.post("/browser/inspect", json={"path": "/admin/courses"})
+
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Browser worker request token is invalid"
+
+
+@pytest.mark.anyio
+async def test_nexus_worker_runs_read_only_browser_inspection(nx_worker_app, monkeypatch):
+    nx_worker_app.state.browser_runtime_config = {
+        "enabled": True,
+        "base_url": "https://example.test",
+        "allowed_paths": ["/admin/*"],
+        "user_data_dir": "/private/profile",
+        "request_token_env": "NEXUS_BROWSER_WORKER_TOKEN",
+    }
+    nx_worker_app.state.browser_attestation = {"configured": True, "ready": True, "browser": "chromium"}
+    monkeypatch.setenv("NEXUS_BROWSER_WORKER_TOKEN", "node-secret")
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        with patch(
+            "nexus_worker.api.browser.inspect_page",
+            new=AsyncMock(return_value={"url": "https://example.test/admin/courses", "text": "Courses"}),
+        ) as mock_inspect:
+            resp = await client.post(
+                "/browser/inspect",
+                json={"path": "/admin/courses", "text_limit": 500},
+                headers={"X-Nexus-Worker-Token": "node-secret"},
+            )
+
+    assert resp.status_code == 200
+    assert resp.json()["text"] == "Courses"
+    mock_inspect.assert_awaited_once_with(
+        nx_worker_app.state.browser_runtime_config,
+        path="/admin/courses",
+        text_limit=500,
+        element_limit=40,
+    )
 
 
 @pytest.mark.anyio
@@ -483,6 +547,24 @@ def test_nexus_worker_auto_register_defaults_off(monkeypatch):
 def test_nexus_worker_auto_register_can_be_enabled(monkeypatch):
     monkeypatch.setenv("NEXUS_WORKER_AUTO_REGISTER", "1")
     assert agent._auto_register_enabled() is True
+
+
+def test_registration_config_removes_private_browser_runtime_settings():
+    registered = agent._registration_config(
+        {
+            "id": "browser-worker",
+            "tooling": {
+                "cli_tools": [],
+                "browser": {
+                    "enabled": True,
+                    "base_url": "https://private.example",
+                    "user_data_dir": "/private/profile",
+                },
+            },
+        }
+    )
+
+    assert registered["tooling"] == {"cli_tools": []}
 
 
 @pytest.mark.anyio

@@ -2,13 +2,15 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from typing import Dict
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from nexus_worker.api import capabilities, health, infer, infer_stream, models
+from nexus_worker.api import browser, capabilities, health, infer, infer_stream, models
+from nexus_worker.browser.attestation import attest_browser_runtime, browser_runtime_config
 from nexus_worker.capability_attestation import attest_worker_capabilities
 from nexus_worker.config_loader import ConfigLoader
 from nexus_worker.hardware.detector import detect_hardware_profile
@@ -47,6 +49,16 @@ def _cp_headers() -> Dict[str, str]:
     return {"X-Nexus-API-Key": token}
 
 
+def _registration_config(worker_config: dict) -> dict:
+    """Remove node-local browser settings before registering with the control plane."""
+
+    registration = deepcopy(worker_config)
+    tooling = registration.get("tooling")
+    if isinstance(tooling, dict):
+        tooling.pop("browser", None)
+    return registration
+
+
 async def _register_with_control_plane(worker_config: dict) -> bool:
     control_plane_url = _control_plane_url()
     if not control_plane_url:
@@ -80,13 +92,18 @@ async def lifespan(app: FastAPI):
         }
 
     declared_worker_config = worker_config
+    browser_attestation = attest_browser_runtime(declared_worker_config)
     worker_config, capability_attestation = attest_worker_capabilities(
         declared_worker_config,
         discover_cli_tools(),
+        browser_attestation,
     )
     app.state.declared_worker_config = declared_worker_config
     app.state.capability_attestation = capability_attestation
     app.state.worker_config = worker_config
+    app.state.browser_attestation = browser_attestation
+    app.state.browser_runtime_config = browser_runtime_config(declared_worker_config)
+    app.state.registration_worker_config = _registration_config(worker_config)
     worker_id = worker_config.get("id", "nexus-worker-standalone")
     control_plane_url = _control_plane_url()
     auto_register = _auto_register_enabled()
@@ -94,7 +111,7 @@ async def lifespan(app: FastAPI):
     heartbeat_task: asyncio.Task | None = None
     if auto_register and control_plane_url:
         try:
-            await _register_with_control_plane(worker_config)
+            await _register_with_control_plane(app.state.registration_worker_config)
             logger.info("nexus_worker registered with control plane as %s", worker_id)
         except Exception as e:
             logger.warning("nexus_worker registration failed: %s", e)
@@ -136,7 +153,9 @@ async def _send_heartbeats(worker_id: str, app: FastAPI) -> None:
                     headers=_cp_headers(),
                 )
                 if resp.status_code == 404:
-                    await _register_with_control_plane(getattr(app.state, "worker_config", {}) or {})
+                    await _register_with_control_plane(
+                        getattr(app.state, "registration_worker_config", {}) or {}
+                    )
                     logger.info("nexus_worker re-registered with control plane as %s after heartbeat 404", worker_id)
                     resp = await client.post(
                         f"{control_plane_url}/v1/workers/{worker_id}/heartbeat",
@@ -156,6 +175,7 @@ def create_app() -> FastAPI:
     app.include_router(models.router)
     app.include_router(infer.router)
     app.include_router(infer_stream.router)
+    app.include_router(browser.router)
 
     @app.exception_handler(Exception)
     async def _generic_exception_handler(request: Request, exc: Exception):

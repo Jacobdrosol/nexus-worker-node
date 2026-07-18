@@ -28,6 +28,7 @@ def test_attestation_registers_only_explicitly_enabled_installed_cli_tools():
         "enabled_cli_tools": ["codex"],
         "unavailable_cli_tools": ["missing-cli"],
         "discarded_declared_tool_capabilities": 2,
+        "browser": {"configured": False, "ready": False},
     }
 
 
@@ -40,3 +41,28 @@ def test_attestation_does_not_enable_discovered_tools_without_policy():
     assert effective["capabilities"] == []
     assert effective["tooling"]["cli_tools"] == []
     assert report["enabled_cli_tools"] == []
+
+
+def test_attestation_adds_browser_only_after_runtime_proof():
+    config = {
+        "capabilities": [{"type": "tool", "provider": "browser", "models": ["browser-ui"]}],
+        "tooling": {"browser": {"enabled": True}},
+    }
+
+    unavailable, unavailable_report = attest_worker_capabilities(
+        config,
+        [],
+        {"configured": True, "ready": False, "reason": "chromium_not_installed"},
+    )
+    ready, ready_report = attest_worker_capabilities(
+        config,
+        [],
+        {"configured": True, "ready": True, "browser": "chromium"},
+    )
+
+    assert unavailable["capabilities"] == []
+    assert unavailable_report["browser"]["ready"] is False
+    assert ready["capabilities"] == [
+        {"type": "tool", "provider": "browser", "models": ["browser-ui"]}
+    ]
+    assert ready_report["browser"] == {"configured": True, "ready": True, "browser": "chromium"}

@@ -11,5 +11,6 @@ async def health(request: Request) -> dict:
         "status": "ok",
         "worker_id": cfg.get("id", "unknown"),
         "enabled_cli_tools": attestation.get("enabled_cli_tools", []),
+        "browser_ready": bool((attestation.get("browser") or {}).get("ready")),
     }
 
