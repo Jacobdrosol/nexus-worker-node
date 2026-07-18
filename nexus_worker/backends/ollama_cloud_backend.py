@@ -14,6 +14,20 @@ def _ollama_options(params: dict) -> dict:
     return options
 
 
+def _chat_body(model: str, messages: list[dict], params: dict, stream: bool) -> dict:
+    request_params = dict(params or {})
+    # Reasoning tokens can consume a small bounded response before a final answer is produced.
+    # Keep worker responses deterministic unless a caller explicitly requests Ollama thinking.
+    think = request_params.pop("think", False)
+    return {
+        "model": model,
+        "messages": messages,
+        "stream": stream,
+        "think": think,
+        "options": _ollama_options(request_params),
+    }
+
+
 def _cloud_timeout() -> httpx.Timeout:
     return httpx.Timeout(connect=10.0, read=None, write=120.0, pool=30.0)
 
@@ -56,12 +70,7 @@ async def infer(
     messages: list[dict],
     params: dict,
 ) -> dict[str, Any]:
-    body = {
-        "model": model,
-        "messages": messages,
-        "stream": False,
-        "options": _ollama_options(params),
-    }
+    body = _chat_body(model=model, messages=messages, params=params, stream=False)
     try:
         async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
             response = await client.post(
@@ -107,12 +116,7 @@ async def infer_stream(
     messages: list[dict],
     params: dict,
 ) -> AsyncGenerator[dict[str, Any], None]:
-    body = {
-        "model": model,
-        "messages": messages,
-        "stream": True,
-        "options": _ollama_options(params),
-    }
+    body = _chat_body(model=model, messages=messages, params=params, stream=True)
     chunks: list[str] = []
     final_usage = {"prompt_tokens": 0, "completion_tokens": 0}
     try:

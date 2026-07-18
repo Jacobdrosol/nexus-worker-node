@@ -296,8 +296,24 @@ async def test_ollama_cloud_backend_maps_max_tokens_to_num_predict(monkeypatch):
     assert result["output"] == "ok"
     assert captured["url"] == "https://ollama.com/api/chat"
     assert captured["headers"]["Authorization"] == "Bearer test-key"
+    assert captured["json"]["think"] is False
     assert captured["json"]["options"]["num_predict"] == 128
     assert "max_tokens" not in captured["json"]["options"]
+
+
+def test_ollama_cloud_chat_body_allows_explicit_thinking():
+    from nexus_worker.backends.ollama_cloud_backend import _chat_body
+
+    body = _chat_body(
+        model="glm-5.2:cloud",
+        messages=[{"role": "user", "content": "hello"}],
+        params={"think": "low", "max_tokens": 64},
+        stream=False,
+    )
+
+    assert body["think"] == "low"
+    assert body["options"]["num_predict"] == 64
+    assert "think" not in body["options"]
 
 
 @pytest.mark.anyio
