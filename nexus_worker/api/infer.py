@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from nexus_worker.services.inference import run_inference
+from nexus_worker.request_auth import require_worker_request_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["infer"])
@@ -22,6 +23,7 @@ class InferRequest(BaseModel):
 @router.post("/infer")
 async def infer(request: Request, body: InferRequest) -> dict:
     cfg = getattr(request.app.state, "worker_config", {})
+    require_worker_request_token(request, cfg)
     request.app.state.inference_inflight = int(
         getattr(request.app.state, "inference_inflight", 0) or 0
     ) + 1

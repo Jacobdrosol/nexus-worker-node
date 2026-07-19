@@ -91,6 +91,44 @@ async def test_nexus_worker_infer_ollama(nx_worker_app):
 
 
 @pytest.mark.anyio
+async def test_nexus_worker_rejects_inference_without_declared_request_token(nx_worker_app, monkeypatch):
+    nx_worker_app.state.worker_config["request_token_env"] = "NEXUS_WORKER_REQUEST_TOKEN"
+    monkeypatch.setenv("NEXUS_WORKER_REQUEST_TOKEN", "node-secret")
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        response = await client.post(
+            "/infer",
+            json={
+                "model": "llama3",
+                "provider": "ollama",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Worker request token is invalid"
+
+
+@pytest.mark.anyio
+async def test_nexus_worker_rejects_stream_without_declared_request_token(nx_worker_app, monkeypatch):
+    nx_worker_app.state.worker_config["request_token_env"] = "NEXUS_WORKER_REQUEST_TOKEN"
+    monkeypatch.setenv("NEXUS_WORKER_REQUEST_TOKEN", "node-secret")
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        response = await client.post(
+            "/infer/stream",
+            json={
+                "model": "llama3",
+                "provider": "ollama",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Worker request token is invalid"
+
+
+@pytest.mark.anyio
 async def test_nexus_worker_rejects_cli_without_declared_tooling(nx_worker_app):
     async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
         with patch("nexus_worker.services.inference.cli_backend.infer", new=AsyncMock()) as mock_infer:

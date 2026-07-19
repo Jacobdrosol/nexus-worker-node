@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from nexus_worker.services.inference import run_inference_stream
+from nexus_worker.request_auth import require_worker_request_token
 
 router = APIRouter(tags=["infer"])
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ class InferStreamRequest(BaseModel):
 @router.post("/infer/stream")
 async def infer_stream(request: Request, body: InferStreamRequest) -> StreamingResponse:
     cfg = getattr(request.app.state, "worker_config", {})
+    require_worker_request_token(request, cfg)
 
     async def event_gen() -> AsyncGenerator[str, None]:
         request.app.state.inference_inflight = int(

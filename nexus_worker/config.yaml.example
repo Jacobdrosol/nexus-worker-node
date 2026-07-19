@@ -4,6 +4,8 @@ host: 0.0.0.0
 port: 8010
 status: offline
 enabled: true
+# Optional control-plane request token reference. Leave disabled for a local-only node.
+# request_token_env: NEXUS_WORKER_REQUEST_TOKEN
 ollama_host: http://localhost:11434
 capabilities:
   - type: llm
