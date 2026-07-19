@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from nexus_worker.browser.inspector import BrowserScopeError, inspect_page
 from nexus_worker.browser.lesson_export import export_lesson_builder_json
-from nexus_worker.browser.question_bank import execute_question_bank_patch
+from nexus_worker.browser.question_bank import execute_question_bank_create, execute_question_bank_patch
 from nexus_worker.browser.test_builder import execute_test_builder_action
 
 router = APIRouter(tags=["browser"])
@@ -107,6 +107,43 @@ class QuestionBankPatchRequest(BaseModel):
     changes: QuestionBankPatchChanges
     review_evidence: QuestionBankReviewEvidence
 
+
+class QuestionBankCreateCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str = Field(min_length=1, max_length=4000)
+    question_type: str = Field(min_length=1, max_length=40)
+    difficulty: str = Field(min_length=1, max_length=40)
+    category: str = Field(default="", max_length=160)
+    is_active: bool
+    options: list[str] | None = Field(default=None, min_length=3, max_length=10)
+    correct_option_index: int | None = Field(default=None, ge=0, le=9)
+    correct_answer: str | None = Field(default=None, max_length=1000)
+
+
+class QuestionBankCreateReviewEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reviewer_bot_id: str = Field(min_length=1, max_length=160)
+    review_task_id: str = Field(min_length=1, max_length=200)
+    approved_create: bool
+    semantic_duplicate_risk: str = Field(min_length=1, max_length=80)
+    reviewed_question_ids: list[int] = Field(max_length=500)
+    existing_question_count: int = Field(ge=0, le=500)
+    minimum_required_count: int = Field(ge=1, le=500)
+    shortage_detected: bool
+    rationale: str = Field(min_length=32, max_length=2000)
+
+
+class QuestionBankCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = Field(min_length=1, max_length=80)
+    confirmation: str = Field(min_length=1, max_length=480)
+    bank_id: int = Field(ge=1)
+    candidate: QuestionBankCreateCandidate
+    review_evidence: QuestionBankCreateReviewEvidence
+
 def _require_browser_request_token(request: Request, browser_config: dict) -> None:
     token_env = str(browser_config.get("request_token_env") or "").strip()
     expected = os.environ.get(token_env, "").strip() if token_env else ""
@@ -195,6 +232,26 @@ async def browser_question_bank_patch(request: Request, body: QuestionBankPatchR
             question_id=body.question_id,
             expected=body.expected.model_dump(exclude_none=True),
             changes=body.changes.model_dump(exclude_none=True),
+            review_evidence=body.review_evidence.model_dump(),
+        )
+    except BrowserScopeError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.post("/browser/question-bank-create")
+async def browser_question_bank_create(request: Request, body: QuestionBankCreateRequest) -> dict:
+    browser_config = getattr(request.app.state, "browser_runtime_config", None)
+    browser_attestation = getattr(request.app.state, "browser_attestation", {})
+    if not isinstance(browser_config, dict) or not browser_attestation.get("ready"):
+        raise HTTPException(status_code=503, detail="Browser tooling is not available on this worker")
+    _require_browser_request_token(request, browser_config)
+    try:
+        return await execute_question_bank_create(
+            browser_config,
+            action=body.action,
+            confirmation=body.confirmation,
+            bank_id=body.bank_id,
+            candidate=body.candidate.model_dump(exclude_none=True),
             review_evidence=body.review_evidence.model_dump(),
         )
     except BrowserScopeError as exc:

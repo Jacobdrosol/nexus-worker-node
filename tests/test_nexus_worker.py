@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from nexus_worker import agent
 from nexus_worker.api import browser, capabilities, health, infer, infer_stream, models
 from nexus_worker.browser.inspector import BrowserScopeError
-from nexus_worker.browser.question_bank import validate_question_bank_patch
+from nexus_worker.browser.question_bank import validate_question_bank_create, validate_question_bank_patch
 from nexus_worker.browser.test_builder import validate_test_builder_action
 from nexus_worker.observability import install_observability
 
@@ -483,6 +483,125 @@ def test_question_bank_patch_validation_rejects_cross_question_confirmation_and_
             browser_config,
             changes={"options": ["1", "2", "3", "4"]},
             **request,
+        )
+
+
+@pytest.mark.anyio
+async def test_nexus_worker_dispatches_only_confirmed_question_bank_creation(nx_worker_app, monkeypatch):
+    nx_worker_app.state.browser_runtime_config = {
+        "enabled": True,
+        "base_url": "https://example.test",
+        "allowed_paths": ["/admin/*"],
+        "user_data_dir": "/private/profile",
+        "request_token_env": "NEXUS_BROWSER_WORKER_TOKEN",
+        "question_bank_patch": {
+            "enabled": True,
+            "allowed_actions": ["create_one"],
+            "reviewer_bot_id": "globeiq-question-bank-review-01-bot",
+        },
+    }
+    nx_worker_app.state.browser_attestation = {"configured": True, "ready": True, "browser": "chromium"}
+    monkeypatch.setenv("NEXUS_BROWSER_WORKER_TOKEN", "node-secret")
+    review_task_id = "review-42-shortage"
+    payload = {
+        "action": "create_one",
+        "confirmation": f"approved:question-bank:create_one:42:{review_task_id}",
+        "bank_id": 42,
+        "candidate": {
+            "prompt": "A shopper has two apples and receives one more. How many apples are there?",
+            "question_type": "MCQ",
+            "difficulty": "easy",
+            "category": "Counting",
+            "is_active": True,
+            "options": ["2", "3", "4"],
+            "correct_option_index": 1,
+        },
+        "review_evidence": {
+            "reviewer_bot_id": "globeiq-question-bank-review-01-bot",
+            "review_task_id": review_task_id,
+            "approved_create": True,
+            "semantic_duplicate_risk": "materially_distinct_context",
+            "reviewed_question_ids": [7, 8, 9],
+            "existing_question_count": 3,
+            "minimum_required_count": 4,
+            "shortage_detected": True,
+            "rationale": "The reviewer inspected every existing question and found a verified shortage.",
+        },
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        with patch(
+            "nexus_worker.api.browser.execute_question_bank_create",
+            new=AsyncMock(return_value={"status": "Question Bank question created and verified"}),
+        ) as mock_action:
+            resp = await client.post(
+                "/browser/question-bank-create",
+                json=payload,
+                headers={"X-Nexus-Worker-Token": "node-secret"},
+            )
+
+    assert resp.status_code == 200
+    assert mock_action.await_args.kwargs["candidate"] == payload["candidate"]
+    assert mock_action.await_args.kwargs["review_evidence"]["existing_question_count"] == 3
+
+
+def test_question_bank_create_validation_requires_full_bank_shortage_and_exact_confirmation():
+    browser_config = {
+        "question_bank_patch": {
+            "enabled": True,
+            "allowed_actions": ["create_one"],
+            "reviewer_bot_id": "globeiq-question-bank-review-01-bot",
+        }
+    }
+    request = {
+        "action": "create_one",
+        "confirmation": "approved:question-bank:create_one:42:review-42-shortage",
+        "bank_id": 42,
+        "candidate": {
+            "prompt": "A shopper has two apples and receives one more. How many apples are there?",
+            "question_type": "MCQ",
+            "difficulty": "easy",
+            "category": "Counting",
+            "is_active": True,
+            "options": ["2", "3", "4"],
+            "correct_option_index": 1,
+        },
+        "review_evidence": {
+            "reviewer_bot_id": "globeiq-question-bank-review-01-bot",
+            "review_task_id": "review-42-shortage",
+            "approved_create": True,
+            "semantic_duplicate_risk": "materially_distinct_context",
+            "reviewed_question_ids": [7, 8, 9],
+            "existing_question_count": 3,
+            "minimum_required_count": 4,
+            "shortage_detected": True,
+            "rationale": "The reviewer inspected every existing question and found a verified shortage.",
+        },
+    }
+
+    with pytest.raises(BrowserScopeError, match="full existing bank"):
+        validate_question_bank_create(
+            browser_config,
+            **{
+                **request,
+                "review_evidence": {
+                    **request["review_evidence"],
+                    "existing_question_count": 4,
+                },
+            },
+        )
+    with pytest.raises(BrowserScopeError, match="exact one-question confirmation"):
+        validate_question_bank_create(
+            browser_config,
+            **{**request, "confirmation": "approved:question-bank:create_one:42:other-task"},
+        )
+    with pytest.raises(BrowserScopeError, match="exactly three options"):
+        validate_question_bank_create(
+            browser_config,
+            **{
+                **request,
+                "candidate": {**request["candidate"], "options": ["1", "2", "3", "4"]},
+            },
         )
 
 
