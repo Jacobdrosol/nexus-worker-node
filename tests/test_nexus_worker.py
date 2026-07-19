@@ -10,7 +10,11 @@ from httpx import ASGITransport, AsyncClient
 from nexus_worker import agent
 from nexus_worker.api import browser, capabilities, health, infer, infer_stream, models
 from nexus_worker.browser.inspector import BrowserScopeError
-from nexus_worker.browser.question_bank import validate_question_bank_create, validate_question_bank_patch
+from nexus_worker.browser.question_bank import (
+    validate_question_bank_create,
+    validate_question_bank_evidence_export,
+    validate_question_bank_patch,
+)
 from nexus_worker.browser.test_builder import validate_test_builder_action
 from nexus_worker.observability import install_observability
 
@@ -602,6 +606,79 @@ def test_question_bank_create_validation_requires_full_bank_shortage_and_exact_c
                 **request,
                 "candidate": {**request["candidate"], "options": ["1", "2", "3", "4"]},
             },
+        )
+
+
+@pytest.mark.anyio
+async def test_nexus_worker_dispatches_only_approved_question_bank_evidence_export(
+    nx_worker_app, monkeypatch
+):
+    nx_worker_app.state.browser_runtime_config = {
+        "enabled": True,
+        "base_url": "https://example.test",
+        "allowed_paths": ["/admin/*"],
+        "user_data_dir": "/private/profile",
+        "request_token_env": "NEXUS_BROWSER_WORKER_TOKEN",
+        "question_bank_export": {
+            "enabled": True,
+            "allowed_actions": ["export_evidence"],
+            "maximum_questions": 500,
+        },
+    }
+    nx_worker_app.state.browser_attestation = {"configured": True, "ready": True, "browser": "chromium"}
+    monkeypatch.setenv("NEXUS_BROWSER_WORKER_TOKEN", "node-secret")
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        with patch(
+            "nexus_worker.api.browser.execute_question_bank_evidence_export",
+            new=AsyncMock(return_value={"status": "Question Bank evidence exported from the UI"}),
+        ) as mock_action:
+            resp = await client.post(
+                "/browser/question-bank-export",
+                json={
+                    "action": "export_evidence",
+                    "bank_id": 42,
+                    "approvedReadOnlyActions": ["export json"],
+                },
+                headers={"X-Nexus-Worker-Token": "node-secret"},
+            )
+
+    assert resp.status_code == 200
+    assert mock_action.await_args.kwargs == {
+        "action": "export_evidence",
+        "bank_id": 42,
+        "approved_read_only_actions": ["export json"],
+    }
+
+
+def test_question_bank_evidence_export_validation_requires_single_read_only_approval():
+    browser_config = {
+        "question_bank_export": {
+            "enabled": True,
+            "allowed_actions": ["export_evidence"],
+            "maximum_questions": 500,
+        }
+    }
+    request = {
+        "action": "export_evidence",
+        "bank_id": 42,
+        "approved_read_only_actions": ["export json"],
+    }
+
+    assert validate_question_bank_evidence_export(browser_config, **request) == {
+        "action": "export_evidence",
+        "bank_id": 42,
+        "maximum_questions": 500,
+    }
+    with pytest.raises(BrowserScopeError, match="approvedReadOnlyActions"):
+        validate_question_bank_evidence_export(
+            browser_config,
+            **{**request, "approved_read_only_actions": ["export json", "download"]},
+        )
+    with pytest.raises(BrowserScopeError, match="not allowed"):
+        validate_question_bank_evidence_export(
+            {"question_bank_export": {"enabled": True, "allowed_actions": []}},
+            **request,
         )
 
 

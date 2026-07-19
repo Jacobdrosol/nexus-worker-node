@@ -10,6 +10,8 @@ from nexus_worker.browser.inspector import BrowserScopeError, scoped_url, valida
 
 _ALLOWED_ACTIONS = {"patch_existing"}
 _CREATE_ACTION = "create_one"
+_EXPORT_ACTION = "export_evidence"
+_READ_ONLY_EXPORT_ACTIONS = {"export json"}
 _QUESTION_BANK_PATH = "/admin/question-bank/{bank_id}/questions"
 _QUESTION_TYPES = {"MCQ", "TRUE_FALSE", "FREE_INPUT"}
 _DIFFICULTIES = {"easy", "medium", "hard", "apply"}
@@ -456,6 +458,46 @@ def validate_question_bank_create(
     }
 
 
+def validate_question_bank_evidence_export(
+    browser_config: dict[str, Any],
+    *,
+    action: str,
+    bank_id: int,
+    approved_read_only_actions: list[str],
+) -> dict[str, Any]:
+    """Validate one complete, read-only Question Bank evidence export."""
+
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action != _EXPORT_ACTION:
+        raise BrowserScopeError("Unsupported Question Bank evidence export action")
+    if bank_id <= 0:
+        raise BrowserScopeError("Question Bank evidence export requires a positive bank id")
+    if (
+        not isinstance(approved_read_only_actions, list)
+        or set(approved_read_only_actions) != _READ_ONLY_EXPORT_ACTIONS
+        or len(approved_read_only_actions) != 1
+    ):
+        raise BrowserScopeError("Question Bank evidence export requires approvedReadOnlyActions=[\"export json\"]")
+    runtime = browser_config.get("question_bank_export")
+    if not isinstance(runtime, dict) or not bool(runtime.get("enabled")):
+        raise BrowserScopeError("Question Bank evidence export is not enabled on this worker")
+    configured_actions = runtime.get("allowed_actions")
+    if not isinstance(configured_actions, list) or normalized_action not in configured_actions:
+        raise BrowserScopeError("Question Bank evidence export is not allowed on this worker")
+    maximum_questions = runtime.get("maximum_questions", 500)
+    if (
+        not isinstance(maximum_questions, int)
+        or isinstance(maximum_questions, bool)
+        or not 1 <= maximum_questions <= 500
+    ):
+        raise BrowserScopeError("Question Bank evidence export maximum must be between one and 500")
+    return {
+        "action": normalized_action,
+        "bank_id": bank_id,
+        "maximum_questions": maximum_questions,
+    }
+
+
 async def _wait_for_search(page: Any, search: str, timeout_ms: int) -> None:
     await page.wait_for_function(
         """(expected) => document.querySelector('[data-testid="question-bank-result-state"]')
@@ -669,6 +711,126 @@ async def execute_question_bank_patch(
                 "url": safe_page_url,
                 "changed_fields": sorted(request["changes"]),
                 "status": "Question Bank patch saved and verified",
+            }
+        finally:
+            await context.close()
+
+
+def _question_bank_total_count(page_text: str) -> int:
+    match = re.search(r"Showing\s+\d+\s+of\s+(\d+)", page_text)
+    if not match:
+        raise BrowserScopeError("Question Bank UI did not expose a complete result count")
+    return int(match.group(1))
+
+
+async def execute_question_bank_evidence_export(
+    browser_config: dict[str, Any],
+    *,
+    action: str,
+    bank_id: int,
+    approved_read_only_actions: list[str],
+) -> dict[str, Any]:
+    """Read one complete Question Bank from the Admin UI without changing it."""
+
+    request = validate_question_bank_evidence_export(
+        browser_config,
+        action=action,
+        bank_id=bank_id,
+        approved_read_only_actions=approved_read_only_actions,
+    )
+    profile_dir = str(browser_config.get("user_data_dir") or "")
+    if not profile_dir:
+        raise BrowserScopeError("Question Bank evidence export requires a persistent profile directory")
+    try:
+        configured_timeout = int(browser_config.get("timeout_seconds"))
+    except (TypeError, ValueError):
+        configured_timeout = 30
+    timeout_ms = configured_timeout * 1000 if configured_timeout <= 1_200 else configured_timeout
+    timeout_ms = max(1_000, min(timeout_ms, 600_000))
+    target_url = scoped_url(
+        str(browser_config.get("base_url") or ""),
+        _QUESTION_BANK_PATH.format(bank_id=bank_id),
+        browser_config.get("allowed_paths"),
+    )
+
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as playwright:
+        context = await playwright.chromium.launch_persistent_context(
+            user_data_dir=profile_dir,
+            headless=bool(browser_config.get("headless", True)),
+        )
+        try:
+            page = context.pages[0] if context.pages else await context.new_page()
+            await page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            safe_page_url = validated_page_url(
+                page.url,
+                str(browser_config.get("base_url") or ""),
+                browser_config.get("allowed_paths"),
+            )
+            await _wait_for_search(page, "", timeout_ms)
+            total_questions = _question_bank_total_count(await page.locator("body").inner_text())
+            if total_questions > request["maximum_questions"]:
+                raise BrowserScopeError(
+                    "Question Bank evidence export exceeds the configured read-only question limit"
+                )
+
+            exported_questions: list[dict[str, Any]] = []
+            seen_ids: set[int] = set()
+            next_button = page.get_by_role("button", name="Next", exact=True)
+            while True:
+                cards = page.get_by_test_id("question-bank-question-list").locator(
+                    '[data-testid^="question-card-"]'
+                )
+                card_count = await cards.count()
+                if card_count == 0 and total_questions:
+                    raise BrowserScopeError("Question Bank UI returned an empty page before the export completed")
+                first_card_id: str | None = None
+                for index in range(card_count):
+                    card = cards.nth(index)
+                    card_id = await card.get_attribute("data-testid")
+                    match = re.fullmatch(r"question-card-(\d+)", card_id or "")
+                    if not match:
+                        continue
+                    if first_card_id is None:
+                        first_card_id = card_id
+                    question_id = int(match.group(1))
+                    if question_id in seen_ids:
+                        raise BrowserScopeError("Question Bank UI repeated a question during the evidence export")
+                    seen_ids.add(question_id)
+                    prompt = _normalized_text(
+                        await page.get_by_test_id(f"question-prompt-{question_id}").inner_text()
+                    )
+                    if not prompt:
+                        raise BrowserScopeError("Question Bank UI returned an empty question prompt")
+                    exported_questions.append(
+                        {
+                            "question_id": question_id,
+                            "prompt": prompt,
+                            "card_text": _normalized_text(await card.inner_text()),
+                        }
+                    )
+                if len(exported_questions) == total_questions:
+                    break
+                if len(exported_questions) > total_questions or await next_button.is_disabled():
+                    raise BrowserScopeError("Question Bank UI could not complete the evidence export")
+                if not first_card_id:
+                    raise BrowserScopeError("Question Bank UI did not expose a page cursor")
+                await next_button.click()
+                await page.wait_for_function(
+                    """previous => document.querySelector('[data-testid^="question-card-"]')
+                        ?.getAttribute('data-testid') !== previous""",
+                    first_card_id,
+                    timeout=timeout_ms,
+                )
+            return {
+                "action": request["action"],
+                "bank_id": bank_id,
+                "question_count": total_questions,
+                "questions": exported_questions,
+                "complete": True,
+                "url": safe_page_url,
+                "status": "Question Bank evidence exported from the UI",
             }
         finally:
             await context.close()

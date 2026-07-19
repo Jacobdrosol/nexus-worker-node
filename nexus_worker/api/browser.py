@@ -10,7 +10,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from nexus_worker.browser.inspector import BrowserScopeError, inspect_page
 from nexus_worker.browser.lesson_export import export_lesson_builder_json
-from nexus_worker.browser.question_bank import execute_question_bank_create, execute_question_bank_patch
+from nexus_worker.browser.question_bank import (
+    execute_question_bank_create,
+    execute_question_bank_evidence_export,
+    execute_question_bank_patch,
+)
 from nexus_worker.browser.test_builder import execute_test_builder_action
 
 router = APIRouter(tags=["browser"])
@@ -144,6 +148,18 @@ class QuestionBankCreateRequest(BaseModel):
     candidate: QuestionBankCreateCandidate
     review_evidence: QuestionBankCreateReviewEvidence
 
+
+class QuestionBankEvidenceExportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    action: str = Field(min_length=1, max_length=80)
+    bank_id: int = Field(ge=1)
+    approved_read_only_actions: list[str] = Field(
+        min_length=1,
+        max_length=4,
+        validation_alias="approvedReadOnlyActions",
+    )
+
 def _require_browser_request_token(request: Request, browser_config: dict) -> None:
     token_env = str(browser_config.get("request_token_env") or "").strip()
     expected = os.environ.get(token_env, "").strip() if token_env else ""
@@ -253,6 +269,26 @@ async def browser_question_bank_create(request: Request, body: QuestionBankCreat
             bank_id=body.bank_id,
             candidate=body.candidate.model_dump(exclude_none=True),
             review_evidence=body.review_evidence.model_dump(),
+        )
+    except BrowserScopeError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.post("/browser/question-bank-export")
+async def browser_question_bank_evidence_export(
+    request: Request, body: QuestionBankEvidenceExportRequest
+) -> dict:
+    browser_config = getattr(request.app.state, "browser_runtime_config", None)
+    browser_attestation = getattr(request.app.state, "browser_attestation", {})
+    if not isinstance(browser_config, dict) or not browser_attestation.get("ready"):
+        raise HTTPException(status_code=503, detail="Read-only browser tooling is not available on this worker")
+    _require_browser_request_token(request, browser_config)
+    try:
+        return await execute_question_bank_evidence_export(
+            browser_config,
+            action=body.action,
+            bank_id=body.bank_id,
+            approved_read_only_actions=body.approved_read_only_actions,
         )
     except BrowserScopeError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
