@@ -109,6 +109,39 @@ def _export_session_check(browser_config: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _required_export_identity(metadata: dict[str, Any], names: tuple[str, ...], label: str) -> int:
+    for name in names:
+        value = metadata.get(name)
+        if isinstance(value, bool):
+            continue
+        try:
+            candidate = int(value)
+        except (TypeError, ValueError):
+            continue
+        if candidate > 0:
+            return candidate
+    raise BrowserScopeError(f"Lesson export did not return a valid {label}")
+
+
+def validate_exported_lesson_identity(
+    lesson_json: dict[str, Any] | list[Any],
+    *,
+    course_id: int,
+    lesson_id: int,
+) -> None:
+    """Reject JSON that does not prove it belongs to the requested lesson scope."""
+
+    if not isinstance(lesson_json, dict):
+        raise BrowserScopeError("Lesson export did not return lesson metadata")
+    metadata = lesson_json.get("lesson")
+    if not isinstance(metadata, dict):
+        raise BrowserScopeError("Lesson export did not return lesson metadata")
+    exported_lesson_id = _required_export_identity(metadata, ("Id", "id", "LessonId", "lessonId"), "lesson id")
+    exported_course_id = _required_export_identity(metadata, ("CourseId", "courseId"), "course id")
+    if exported_lesson_id != lesson_id or exported_course_id != course_id:
+        raise BrowserScopeError("Lesson export identity does not match the configured scope")
+
+
 async def export_lesson_builder_json(
     browser_config: dict[str, Any],
     *,
@@ -213,6 +246,11 @@ async def export_lesson_builder_json(
                 raise BrowserScopeError("Lesson export returned invalid JSON") from exc
             if not isinstance(lesson_json, (dict, list)):
                 raise BrowserScopeError("Lesson export returned an unsupported JSON shape")
+            validate_exported_lesson_identity(
+                lesson_json,
+                course_id=request["course_id"],
+                lesson_id=request["lesson_id"],
+            )
             return {
                 "action": _REQUIRED_ACTION,
                 "course_id": request["course_id"],

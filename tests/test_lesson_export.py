@@ -2,7 +2,11 @@ import pytest
 
 from nexus_worker.api.browser import BrowserLessonExportRequest
 from nexus_worker.browser.inspector import BrowserScopeError
-from nexus_worker.browser.lesson_export import _export_session_check, validate_lesson_export
+from nexus_worker.browser.lesson_export import (
+    _export_session_check,
+    validate_exported_lesson_identity,
+    validate_lesson_export,
+)
 
 
 def _browser_config() -> dict:
@@ -86,3 +90,18 @@ def test_lesson_export_requires_a_current_authenticated_browser_session_check():
 
     with pytest.raises(BrowserScopeError, match="authenticated browser session check"):
         _export_session_check(config)
+
+
+def test_lesson_export_requires_response_identity_to_match_its_scope():
+    validate_exported_lesson_identity(
+        {"lesson": {"Id": 605001784, "CourseId": 57}},
+        course_id=57,
+        lesson_id=605001784,
+    )
+
+    with pytest.raises(BrowserScopeError, match="does not match"):
+        validate_exported_lesson_identity(
+            {"lesson": {"Id": 605001784, "CourseId": 60}},
+            course_id=57,
+            lesson_id=605001784,
+        )
