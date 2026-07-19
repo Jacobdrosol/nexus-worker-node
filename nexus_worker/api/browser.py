@@ -6,7 +6,7 @@ import hmac
 import os
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from nexus_worker.browser.inspector import BrowserScopeError, inspect_page
 from nexus_worker.browser.test_builder import execute_test_builder_action
@@ -21,17 +21,17 @@ class BrowserInspectRequest(BaseModel):
 
 
 class TestBuilderBankSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=240)
     easy: int = Field(default=0, ge=0, le=100)
     medium: int = Field(default=0, ge=0, le=100)
     hard: int = Field(default=0, ge=0, le=100)
     apply: int = Field(default=0, ge=0, le=100)
 
-    class Config:
-        extra = "forbid"
-
-
 class TestBuilderActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     action: str = Field(min_length=1, max_length=80)
     mode: str = Field(default="draft", min_length=1, max_length=40)
     confirmation: str = Field(min_length=1, max_length=120)
@@ -43,10 +43,6 @@ class TestBuilderActionRequest(BaseModel):
     allow_review: bool
     banks: list[TestBuilderBankSelection] = Field(min_length=1, max_length=12)
     acknowledge_attempt_reset: bool = False
-
-    class Config:
-        extra = "forbid"
-
 
 def _require_browser_request_token(request: Request, browser_config: dict) -> None:
     token_env = str(browser_config.get("request_token_env") or "").strip()
@@ -95,7 +91,7 @@ async def browser_test_builder(request: Request, body: TestBuilderActionRequest)
             pass_threshold_pct=body.pass_threshold_pct,
             time_limit_seconds=body.time_limit_seconds,
             allow_review=body.allow_review,
-            banks=[selection.dict() for selection in body.banks],
+            banks=[selection.model_dump() for selection in body.banks],
             acknowledge_attempt_reset=body.acknowledge_attempt_reset,
         )
     except BrowserScopeError as exc:

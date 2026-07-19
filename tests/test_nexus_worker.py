@@ -200,6 +200,37 @@ async def test_nexus_worker_rejects_unenabled_test_builder_actions(nx_worker_app
 
 
 @pytest.mark.anyio
+async def test_nexus_worker_rejects_arbitrary_test_builder_fields(nx_worker_app, monkeypatch):
+    nx_worker_app.state.browser_runtime_config = {
+        "enabled": True,
+        "base_url": "https://example.test",
+        "allowed_paths": ["/admin/*"],
+        "user_data_dir": "/private/profile",
+        "request_token_env": "NEXUS_BROWSER_WORKER_TOKEN",
+    }
+    nx_worker_app.state.browser_attestation = {"configured": True, "ready": True, "browser": "chromium"}
+    monkeypatch.setenv("NEXUS_BROWSER_WORKER_TOKEN", "node-secret")
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        resp = await client.post(
+            "/browser/test-builder",
+            json={
+                "action": "save_configuration",
+                "confirmation": "approved:test-builder:save_configuration",
+                "course_id": 60,
+                "lesson_id": 601,
+                "pass_threshold_pct": 70,
+                "allow_review": False,
+                "banks": [{"name": "Lesson 1", "easy": 1}],
+                "selector": "button.publish",
+            },
+            headers={"X-Nexus-Worker-Token": "node-secret"},
+        )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
 async def test_nexus_worker_dispatches_only_confirmed_test_builder_actions(nx_worker_app, monkeypatch):
     nx_worker_app.state.browser_runtime_config = {
         "enabled": True,
