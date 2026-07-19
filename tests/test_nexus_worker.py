@@ -319,6 +319,15 @@ async def test_nexus_worker_rejects_unenabled_question_bank_patch(nx_worker_app,
                 "question_id": 7,
                 "expected": {"prompt": "What is 2 + 2?", "question_type": "MCQ"},
                 "changes": {"prompt": "What is 3 + 1?"},
+                "review_evidence": {
+                    "reviewer_bot_id": "globeiq-question-bank-review-01-bot",
+                    "review_task_id": "review-42-7",
+                    "approved_patch": True,
+                    "semantic_duplicate_risk": "materially_distinct_context",
+                    "reviewed_question_ids": [7],
+                    "shortage_detected": False,
+                    "rationale": "The reviewer checked the target and comparable questions for duplication.",
+                },
             },
             headers={"X-Nexus-Worker-Token": "node-secret"},
         )
@@ -338,6 +347,7 @@ async def test_nexus_worker_dispatches_only_confirmed_question_bank_patch(nx_wor
         "question_bank_patch": {
             "enabled": True,
             "allowed_actions": ["patch_existing"],
+            "reviewer_bot_id": "globeiq-question-bank-review-01-bot",
         },
     }
     nx_worker_app.state.browser_attestation = {"configured": True, "ready": True, "browser": "chromium"}
@@ -363,6 +373,15 @@ async def test_nexus_worker_dispatches_only_confirmed_question_bank_patch(nx_wor
                         "correct_option_index": 2,
                     },
                     "changes": {"prompt": "What is 3 + 1?"},
+                    "review_evidence": {
+                        "reviewer_bot_id": "globeiq-question-bank-review-01-bot",
+                        "review_task_id": "review-42-7",
+                        "approved_patch": True,
+                        "semantic_duplicate_risk": "materially_distinct_context",
+                        "reviewed_question_ids": [7],
+                        "shortage_detected": False,
+                        "rationale": "The reviewer checked the target and comparable questions for duplication.",
+                    },
                 },
                 headers={"X-Nexus-Worker-Token": "node-secret"},
             )
@@ -378,6 +397,7 @@ def test_question_bank_patch_validation_rejects_cross_question_confirmation_and_
         "question_bank_patch": {
             "enabled": True,
             "allowed_actions": ["patch_existing"],
+            "reviewer_bot_id": "globeiq-question-bank-review-01-bot",
         }
     }
     request = {
@@ -391,6 +411,15 @@ def test_question_bank_patch_validation_rejects_cross_question_confirmation_and_
             "options": ["2", "3", "4"],
             "correct_option_index": 2,
         },
+        "review_evidence": {
+            "reviewer_bot_id": "globeiq-question-bank-review-01-bot",
+            "review_task_id": "review-42-7",
+            "approved_patch": True,
+            "semantic_duplicate_risk": "materially_distinct_context",
+            "reviewed_question_ids": [7],
+            "shortage_detected": False,
+            "rationale": "The reviewer checked the target and comparable questions for duplication.",
+        },
     }
 
     with pytest.raises(BrowserScopeError, match="exact single-question confirmation"):
@@ -398,6 +427,18 @@ def test_question_bank_patch_validation_rejects_cross_question_confirmation_and_
             browser_config,
             changes={"prompt": "What is 3 + 1?"},
             **{**request, "question_id": 8},
+        )
+    with pytest.raises(BrowserScopeError, match="unauthorized reviewer"):
+        validate_question_bank_patch(
+            browser_config,
+            changes={"prompt": "What is 3 + 1?"},
+            **{
+                **request,
+                "review_evidence": {
+                    **request["review_evidence"],
+                    "reviewer_bot_id": "untrusted-reviewer",
+                },
+            },
         )
     with pytest.raises(BrowserScopeError, match="cannot add or remove options"):
         validate_question_bank_patch(

@@ -71,6 +71,18 @@ class QuestionBankPatchChanges(BaseModel):
     correct_answer: str | None = Field(default=None, max_length=1000)
 
 
+class QuestionBankReviewEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reviewer_bot_id: str = Field(min_length=1, max_length=160)
+    review_task_id: str = Field(min_length=1, max_length=200)
+    approved_patch: bool
+    semantic_duplicate_risk: str = Field(min_length=1, max_length=80)
+    reviewed_question_ids: list[int] = Field(min_length=1, max_length=500)
+    shortage_detected: bool
+    rationale: str = Field(min_length=32, max_length=2000)
+
+
 class QuestionBankPatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -80,6 +92,7 @@ class QuestionBankPatchRequest(BaseModel):
     question_id: int = Field(ge=1)
     expected: QuestionBankExpectedState
     changes: QuestionBankPatchChanges
+    review_evidence: QuestionBankReviewEvidence
 
 def _require_browser_request_token(request: Request, browser_config: dict) -> None:
     token_env = str(browser_config.get("request_token_env") or "").strip()
@@ -151,6 +164,7 @@ async def browser_question_bank_patch(request: Request, body: QuestionBankPatchR
             question_id=body.question_id,
             expected=body.expected.model_dump(exclude_none=True),
             changes=body.changes.model_dump(exclude_none=True),
+            review_evidence=body.review_evidence.model_dump(),
         )
     except BrowserScopeError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc

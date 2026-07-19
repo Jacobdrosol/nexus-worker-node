@@ -31,6 +31,16 @@ _CHANGE_FIELDS = {
     "correct_option_index",
     "correct_answer",
 }
+_REVIEW_EVIDENCE_FIELDS = {
+    "reviewer_bot_id",
+    "review_task_id",
+    "approved_patch",
+    "semantic_duplicate_risk",
+    "reviewed_question_ids",
+    "shortage_detected",
+    "rationale",
+}
+_SEMANTIC_DUPLICATE_RISKS = {"no_material_duplicate", "materially_distinct_context"}
 
 
 def _normalized_text(value: Any) -> str:
@@ -69,6 +79,54 @@ def _validate_correct_index(value: Any, *, option_count: int, label: str) -> int
     return value
 
 
+def _validate_review_evidence(
+    browser_config: dict[str, Any], review_evidence: Any, *, question_id: int
+) -> dict[str, Any]:
+    if not isinstance(review_evidence, dict):
+        raise BrowserScopeError("Question Bank patch requires reviewer evidence")
+    unexpected_fields = sorted(set(review_evidence) - _REVIEW_EVIDENCE_FIELDS)
+    if unexpected_fields:
+        raise BrowserScopeError(
+            "Question Bank reviewer evidence contains unsupported fields: "
+            + ", ".join(unexpected_fields)
+        )
+    reviewer_bot_id = _required_text(
+        review_evidence.get("reviewer_bot_id"), label="reviewer bot id", maximum=160
+    )
+    runtime = browser_config.get("question_bank_patch")
+    configured_reviewer = str(runtime.get("reviewer_bot_id") or "").strip() if isinstance(runtime, dict) else ""
+    if configured_reviewer and reviewer_bot_id != configured_reviewer:
+        raise BrowserScopeError("Question Bank reviewer evidence came from an unauthorized reviewer")
+    review_task_id = _required_text(
+        review_evidence.get("review_task_id"), label="review task id", maximum=200
+    )
+    if review_evidence.get("approved_patch") is not True:
+        raise BrowserScopeError("Question Bank patch requires reviewer approval")
+    duplicate_risk = str(review_evidence.get("semantic_duplicate_risk") or "").strip()
+    if duplicate_risk not in _SEMANTIC_DUPLICATE_RISKS:
+        raise BrowserScopeError("Question Bank reviewer evidence does not clear semantic duplication risk")
+    reviewed_ids = review_evidence.get("reviewed_question_ids")
+    if (
+        not isinstance(reviewed_ids, list)
+        or not 1 <= len(reviewed_ids) <= 500
+        or any(not isinstance(item, int) or isinstance(item, bool) or item <= 0 for item in reviewed_ids)
+        or question_id not in reviewed_ids
+    ):
+        raise BrowserScopeError("Question Bank reviewer evidence must include the target question id")
+    if review_evidence.get("shortage_detected") is not False:
+        raise BrowserScopeError("Question Bank patch action cannot add questions for a shortage")
+    rationale = _required_text(review_evidence.get("rationale"), label="review rationale", maximum=2000)
+    if len(rationale) < 32:
+        raise BrowserScopeError("Question Bank reviewer rationale is too short")
+    return {
+        "reviewer_bot_id": reviewer_bot_id,
+        "review_task_id": review_task_id,
+        "semantic_duplicate_risk": duplicate_risk,
+        "reviewed_question_ids": reviewed_ids,
+        "rationale": rationale,
+    }
+
+
 def validate_question_bank_patch(
     browser_config: dict[str, Any],
     *,
@@ -78,6 +136,7 @@ def validate_question_bank_patch(
     question_id: int,
     expected: dict[str, Any],
     changes: dict[str, Any],
+    review_evidence: dict[str, Any],
 ) -> dict[str, Any]:
     """Validate a single existing-question patch before a browser is launched."""
 
@@ -97,6 +156,9 @@ def validate_question_bank_patch(
         raise BrowserScopeError("Question Bank patch is not allowed on this worker")
     if not isinstance(expected, dict) or not isinstance(changes, dict):
         raise BrowserScopeError("Question Bank patch requires expected and changes objects")
+    sanitized_review_evidence = _validate_review_evidence(
+        browser_config, review_evidence, question_id=question_id
+    )
     expected_unknown = sorted(set(expected) - _EXPECTED_FIELDS)
     change_unknown = sorted(set(changes) - _CHANGE_FIELDS)
     if expected_unknown or change_unknown:
@@ -202,6 +264,7 @@ def validate_question_bank_patch(
         "question_id": question_id,
         "expected": sanitized_expected,
         "changes": sanitized_changes,
+        "review_evidence": sanitized_review_evidence,
     }
 
 
@@ -265,6 +328,7 @@ async def execute_question_bank_patch(
     question_id: int,
     expected: dict[str, Any],
     changes: dict[str, Any],
+    review_evidence: dict[str, Any],
 ) -> dict[str, Any]:
     """Patch one existing Question Bank question through the fixed Admin UI only."""
 
@@ -276,16 +340,20 @@ async def execute_question_bank_patch(
         question_id=question_id,
         expected=expected,
         changes=changes,
+        review_evidence=review_evidence,
     )
     profile_dir = str(browser_config.get("user_data_dir") or "")
     if not profile_dir:
         raise BrowserScopeError("Question Bank patches require a persistent profile directory")
     timeout_seconds = browser_config.get("timeout_seconds")
     try:
-        timeout_ms = int(timeout_seconds) * 1000
+        configured_timeout = int(timeout_seconds)
     except (TypeError, ValueError):
-        timeout_ms = 30_000
-    timeout_ms = max(1_000, min(timeout_ms, 120_000))
+        configured_timeout = 30
+    # Existing private browser configs used milliseconds despite the historical
+    # field name. New configs use seconds; support both without unbounded waits.
+    timeout_ms = configured_timeout * 1000 if configured_timeout <= 1_200 else configured_timeout
+    timeout_ms = max(1_000, min(timeout_ms, 600_000))
     target_url = scoped_url(
         str(browser_config.get("base_url") or ""),
         _QUESTION_BANK_PATH.format(bank_id=bank_id),
