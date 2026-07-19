@@ -46,6 +46,17 @@ def test_browser_session_bootstrap_reads_only_declared_private_credentials(monke
     assert settings.password == "test-password"
 
 
+def test_browser_session_bootstrap_allows_bounded_multi_minute_login(monkeypatch):
+    monkeypatch.setenv("NEXUS_TEST_USERNAME", "operator@example.test")
+    monkeypatch.setenv("NEXUS_TEST_PASSWORD", "test-password")
+    worker_config = _worker_config()
+    worker_config["tooling"]["browser"]["session_bootstrap"]["timeout_seconds"] = 300
+
+    settings = browser_session_bootstrap_settings(worker_config)
+
+    assert settings.timeout_ms == 300_000
+
+
 def test_browser_session_bootstrap_rejects_missing_private_credentials(monkeypatch):
     monkeypatch.delenv("NEXUS_TEST_USERNAME", raising=False)
     monkeypatch.delenv("NEXUS_TEST_PASSWORD", raising=False)

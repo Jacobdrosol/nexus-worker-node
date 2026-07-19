@@ -39,7 +39,7 @@ def _bounded_timeout_seconds(value: Any) -> int:
         seconds = int(value or 30)
     except (TypeError, ValueError):
         seconds = 30
-    return max(5, min(seconds, 120))
+    return max(5, min(seconds, 600))
 
 
 def browser_session_bootstrap_settings(
@@ -109,6 +109,7 @@ def bootstrap_browser_session(worker_config: dict[str, Any]) -> dict[str, Any]:
 
     settings = browser_session_bootstrap_settings(worker_config)
     try:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as playwright:
@@ -122,7 +123,14 @@ def bootstrap_browser_session(worker_config: dict[str, Any]) -> dict[str, Any]:
                 page.locator(settings.username_selector).fill(settings.username, timeout=settings.timeout_ms)
                 page.locator(settings.password_selector).fill(settings.password, timeout=settings.timeout_ms)
                 page.locator(settings.submit_selector).click(timeout=settings.timeout_ms)
-                page.wait_for_timeout(min(settings.timeout_ms, 1_000))
+                try:
+                    page.wait_for_url(
+                        lambda url: url != settings.login_url,
+                        timeout=settings.timeout_ms,
+                    )
+                except PlaywrightTimeoutError:
+                    # The subsequent bounded session check distinguishes an invalid login from a slow route change.
+                    pass
             finally:
                 context.close()
     except BrowserSessionBootstrapError:

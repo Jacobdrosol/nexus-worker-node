@@ -53,7 +53,7 @@ def _authenticated_session_check(runtime_config: dict[str, Any]) -> dict[str, An
     return {
         "target_url": target_url,
         "authenticated_selector": selector,
-        "timeout_ms": max(1_000, min(timeout_seconds * 1_000, 30_000)),
+        "timeout_ms": max(1_000, min(timeout_seconds * 1_000, 600_000)),
     }
 
 
