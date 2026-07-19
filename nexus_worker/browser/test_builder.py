@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from nexus_worker.browser.inspector import BrowserScopeError, scoped_url, validated_page_url
+from nexus_worker.browser.inspector import BrowserScopeError, browser_timeout_ms, scoped_url, validated_page_url
 
 
 _ALLOWED_ACTIONS = {"save_configuration", "build_from_banks"}
@@ -103,9 +103,7 @@ async def execute_test_builder_action(
     profile_dir = str(browser_config.get("user_data_dir") or "")
     if not profile_dir:
         raise BrowserScopeError("Test Builder actions require a persistent profile directory")
-    timeout_ms = _bounded_int(
-        browser_config.get("timeout_seconds"), default=30000, minimum=1000, maximum=120000
-    )
+    timeout_ms = browser_timeout_ms(browser_config)
     target_path = _TEST_BUILDER_PATH.format(course_id=course_id, lesson_id=lesson_id)
     target_url = scoped_url(
         str(browser_config.get("base_url") or ""),

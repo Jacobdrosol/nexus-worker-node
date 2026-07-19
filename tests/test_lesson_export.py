@@ -2,13 +2,19 @@ import pytest
 
 from nexus_worker.api.browser import BrowserLessonExportRequest
 from nexus_worker.browser.inspector import BrowserScopeError
-from nexus_worker.browser.lesson_export import validate_lesson_export
+from nexus_worker.browser.lesson_export import _export_session_check, validate_lesson_export
 
 
 def _browser_config() -> dict:
     return {
         "base_url": "https://globeiq.example",
+        "allowed_paths": ["/admin/courses"],
         "user_data_dir": "/private/browser-profile",
+        "session_check": {
+            "required": True,
+            "path": "/admin/courses",
+            "authenticated_selector": "h2",
+        },
         "lesson_json_export": {
             "enabled": True,
             "allowed_actions": ["export json"],
@@ -72,3 +78,11 @@ def test_lesson_export_request_uses_the_public_read_only_action_field_name():
     )
 
     assert request.approved_read_only_actions == ["export json"]
+
+
+def test_lesson_export_requires_a_current_authenticated_browser_session_check():
+    config = _browser_config()
+    config.pop("session_check")
+
+    with pytest.raises(BrowserScopeError, match="authenticated browser session check"):
+        _export_session_check(config)

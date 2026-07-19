@@ -9,6 +9,7 @@ from typing import Any
 from nexus_worker.browser.inspector import (
     BrowserScopeError,
     _bounded_int,
+    browser_timeout_ms,
     scoped_url,
     validated_page_url,
 )
@@ -88,6 +89,26 @@ def validate_lesson_export(
     }
 
 
+def _export_session_check(browser_config: dict[str, Any]) -> dict[str, str]:
+    """Require a current authenticated UI session before using its cookies for export."""
+
+    raw_check = browser_config.get("session_check")
+    if not isinstance(raw_check, dict) or not bool(raw_check.get("required")):
+        raise BrowserScopeError("Lesson export requires an authenticated browser session check")
+    path = str(raw_check.get("path") or "").strip()
+    selector = str(raw_check.get("authenticated_selector") or "").strip()
+    if not path or not selector or len(selector) > 500:
+        raise BrowserScopeError("Lesson export requires a valid authenticated browser session check")
+    return {
+        "url": scoped_url(
+            str(browser_config.get("base_url") or ""),
+            path,
+            browser_config.get("allowed_paths"),
+        ),
+        "selector": selector,
+    }
+
+
 async def export_lesson_builder_json(
     browser_config: dict[str, Any],
     *,
@@ -105,7 +126,8 @@ async def export_lesson_builder_json(
         lesson_id=lesson_id,
         approved_read_only_actions=approved_read_only_actions,
     )
-    timeout_ms = _bounded_int(browser_config.get("timeout_seconds"), default=30_000, minimum=1_000, maximum=120_000)
+    session_check = _export_session_check(browser_config)
+    timeout_ms = browser_timeout_ms(browser_config)
 
     async with async_playwright() as playwright:
         context = await playwright.chromium.launch_persistent_context(
@@ -114,50 +136,60 @@ async def export_lesson_builder_json(
         )
         try:
             page = context.pages[0] if context.pages else await context.new_page()
-            result = await page.evaluate(
-                """
-                async ({ url, maxBytes }) => {
-                    const response = await fetch(url, {
-                        credentials: 'same-origin',
-                        method: 'GET',
-                        redirect: 'follow',
-                    });
-                    const declaredLength = Number(response.headers.get('content-length') || '0');
-                    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-                        return { url: response.url, status: response.status, tooLarge: true };
-                    }
-                    if (!response.body) {
-                        return { url: response.url, status: response.status, noBody: true };
-                    }
-                    const reader = response.body.getReader();
-                    const chunks = [];
-                    let size = 0;
-                    while (true) {
-                        const next = await reader.read();
-                        if (next.done) break;
-                        size += next.value.byteLength;
-                        if (size > maxBytes) {
-                            await reader.cancel();
+            await page.goto(session_check["url"], wait_until="domcontentloaded", timeout=timeout_ms)
+            validated_page_url(
+                page.url,
+                str(browser_config.get("base_url") or ""),
+                browser_config.get("allowed_paths"),
+            )
+            await page.locator(session_check["selector"]).first.wait_for(state="visible", timeout=timeout_ms)
+            try:
+                result = await page.evaluate(
+                    """
+                    async ({ url, maxBytes }) => {
+                        const response = await fetch(url, {
+                            credentials: 'same-origin',
+                            method: 'GET',
+                            redirect: 'follow',
+                        });
+                        const declaredLength = Number(response.headers.get('content-length') || '0');
+                        if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
                             return { url: response.url, status: response.status, tooLarge: true };
                         }
-                        chunks.push(next.value);
+                        if (!response.body) {
+                            return { url: response.url, status: response.status, noBody: true };
+                        }
+                        const reader = response.body.getReader();
+                        const chunks = [];
+                        let size = 0;
+                        while (true) {
+                            const next = await reader.read();
+                            if (next.done) break;
+                            size += next.value.byteLength;
+                            if (size > maxBytes) {
+                                await reader.cancel();
+                                return { url: response.url, status: response.status, tooLarge: true };
+                            }
+                            chunks.push(next.value);
+                        }
+                        const bytes = new Uint8Array(size);
+                        let offset = 0;
+                        for (const chunk of chunks) {
+                            bytes.set(chunk, offset);
+                            offset += chunk.byteLength;
+                        }
+                        return {
+                            url: response.url,
+                            status: response.status,
+                            contentType: response.headers.get('content-type') || '',
+                            text: new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+                        };
                     }
-                    const bytes = new Uint8Array(size);
-                    let offset = 0;
-                    for (const chunk of chunks) {
-                        bytes.set(chunk, offset);
-                        offset += chunk.byteLength;
-                    }
-                    return {
-                        url: response.url,
-                        status: response.status,
-                        contentType: response.headers.get('content-type') || '',
-                        text: new TextDecoder('utf-8', { fatal: true }).decode(bytes),
-                    };
-                }
-                """,
-                {"url": request["url"], "maxBytes": request["max_bytes"]},
-            )
+                    """,
+                    {"url": request["url"], "maxBytes": request["max_bytes"]},
+                )
+            except Exception as exc:
+                raise BrowserScopeError("Lesson export request failed") from exc
             if not isinstance(result, dict):
                 raise BrowserScopeError("Lesson export returned an invalid response")
             safe_url = validated_page_url(

@@ -2,7 +2,9 @@ import pytest
 
 from nexus_worker.browser.inspector import (
     BrowserScopeError,
+    browser_timeout_ms,
     ensure_allowed_path,
+    loading_shell_present,
     normalized_relative_path,
     render_ready_selector,
     render_ready_timeout_ms,
@@ -78,6 +80,24 @@ def test_browser_render_ready_wait_is_optional_and_bounded():
     assert render_ready_timeout_ms({"render_ready_timeout_seconds": "7"}) == 7_000
     assert render_ready_timeout_ms({"render_ready_timeout_seconds": 999}) == 300_000
     assert render_ready_timeout_ms({"render_ready_timeout_seconds": -1}) == 0
+
+
+def test_browser_readiness_requires_a_render_wait_when_configured():
+    assert render_ready_timeout_ms({"render_ready_timeout_seconds": 90}) == 90_000
+
+
+def test_browser_loading_shell_detection_rejects_transient_client_states():
+    assert loading_shell_present("Application content is loading.")
+    assert loading_shell_present("Authorizing")
+    assert loading_shell_present("Loading...")
+    assert not loading_shell_present("Course Management")
+
+
+def test_browser_operation_timeout_uses_seconds_with_bounded_legacy_compatibility():
+    assert browser_timeout_ms({}) == 30_000
+    assert browser_timeout_ms({"timeout_seconds": 120}) == 120_000
+    assert browser_timeout_ms({"timeout_seconds": 300_000}) == 300_000
+    assert browser_timeout_ms({"timeout_seconds": 999_999}) == 600_000
 
 
 def test_browser_render_ready_selector_is_optional_and_bounded():

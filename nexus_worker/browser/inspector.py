@@ -10,6 +10,12 @@ class BrowserScopeError(ValueError):
     """Raised when a browser request is outside its configured read-only scope."""
 
 
+def loading_shell_present(text: str) -> bool:
+    """Detect the transient client-rendering states that are not usable evidence."""
+
+    return any(marker in text for marker in ("Application content is loading.", "Authorizing", "Loading..."))
+
+
 def normalized_relative_path(path: str) -> str:
     """Reject absolute URLs, traversal, queries, and fragments before navigation."""
 
@@ -115,6 +121,19 @@ def render_ready_timeout_ms(browser_config: dict[str, Any]) -> int:
     return seconds * 1_000
 
 
+def browser_timeout_ms(browser_config: dict[str, Any]) -> int:
+    """Return a bounded browser-operation timeout from the historical seconds setting."""
+
+    try:
+        configured = int(browser_config.get("timeout_seconds") or 30)
+    except (TypeError, ValueError):
+        configured = 30
+    # Early private configurations used milliseconds despite the field name.
+    # Treat normal values as seconds while retaining that bounded compatibility.
+    milliseconds = configured * 1_000 if configured <= 1_200 else configured
+    return max(1_000, min(milliseconds, 600_000))
+
+
 def render_ready_selector(browser_config: dict[str, Any], path: str = "") -> str:
     """Return an optional bounded selector that proves a client-rendered page is ready."""
 
@@ -150,7 +169,7 @@ async def inspect_page(
     profile_dir = str(browser_config.get("user_data_dir") or "")
     if not profile_dir:
         raise BrowserScopeError("Browser inspection requires a persistent profile directory")
-    timeout_ms = _bounded_int(browser_config.get("timeout_seconds"), default=30000, minimum=1000, maximum=120000)
+    timeout_ms = browser_timeout_ms(browser_config)
     ready_timeout_ms = render_ready_timeout_ms(browser_config)
     ready_selector = render_ready_selector(browser_config, path)
     safe_text_limit = _bounded_int(text_limit, default=12000, minimum=100, maximum=32000)
@@ -175,6 +194,7 @@ async def inspect_page(
                 pass
             if ready_timeout_ms:
                 try:
+                    await page.wait_for_timeout(min(750, ready_timeout_ms))
                     if ready_selector:
                         await page.locator(ready_selector).first.wait_for(
                             state="visible",
@@ -183,11 +203,12 @@ async def inspect_page(
                     else:
                         await page.wait_for_function(
                             """
-                            () => {
-                                const text = (document.body?.innerText || '').trim();
-                                return text.length > 0
+                                () => {
+                                    const text = (document.body?.innerText || '').trim();
+                                    return text.length > 0
                                     && !text.includes('Application content is loading.')
-                                    && !text.includes('Authorizing');
+                                    && !text.includes('Authorizing')
+                                    && !text.includes('Loading...');
                             }
                             """,
                             timeout=ready_timeout_ms,
@@ -196,8 +217,15 @@ async def inspect_page(
                     raise BrowserScopeError(
                         "Browser page did not finish rendering within the configured read-only wait"
                     ) from exc
+            safe_page_url = validated_page_url(
+                page.url,
+                str(browser_config.get("base_url") or ""),
+                browser_config.get("allowed_paths"),
+            )
             title = await page.title()
             body_text = await page.locator("body").inner_text(timeout=timeout_ms)
+            if loading_shell_present(body_text):
+                raise BrowserScopeError("Browser page did not finish rendering within the configured read-only wait")
             elements = await page.locator("a, button, input, select, textarea").evaluate_all(
                 """
                 (nodes, limit) => nodes.slice(0, limit).map((node) => ({
