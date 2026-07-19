@@ -4,6 +4,8 @@ from nexus_worker.browser.inspector import (
     BrowserScopeError,
     ensure_allowed_path,
     normalized_relative_path,
+    render_ready_selector,
+    render_ready_timeout_ms,
     scoped_url,
     validated_page_url,
 )
@@ -69,3 +71,23 @@ def test_browser_scope_rejects_redirects_outside_configured_origin():
 def test_browser_scope_rejects_unbounded_root_scope():
     with pytest.raises(BrowserScopeError, match="every path"):
         ensure_allowed_path("/admin/courses", ["/*"])
+
+
+def test_browser_render_ready_wait_is_optional_and_bounded():
+    assert render_ready_timeout_ms({}) == 0
+    assert render_ready_timeout_ms({"render_ready_timeout_seconds": "7"}) == 7_000
+    assert render_ready_timeout_ms({"render_ready_timeout_seconds": 999}) == 300_000
+    assert render_ready_timeout_ms({"render_ready_timeout_seconds": -1}) == 0
+
+
+def test_browser_render_ready_selector_is_optional_and_bounded():
+    assert render_ready_selector({}) == ""
+    assert render_ready_selector({"render_ready_selector": "h1, h2"}) == "h1, h2"
+    with pytest.raises(BrowserScopeError, match="selector"):
+        render_ready_selector({"render_ready_selector": "x" * 501})
+    assert render_ready_selector(
+        {"render_ready_selectors": {"/admin/courses/57/lessons": "h2:has-text('Lesson Manager')"}},
+        "/admin/courses/57/lessons",
+    ) == "h2:has-text('Lesson Manager')"
+    with pytest.raises(BrowserScopeError, match="object"):
+        render_ready_selector({"render_ready_selectors": ["h2"]}, "/admin/courses/57/lessons")

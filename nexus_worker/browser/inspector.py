@@ -103,6 +103,34 @@ def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int
     return max(minimum, min(candidate, maximum))
 
 
+def render_ready_timeout_ms(browser_config: dict[str, Any]) -> int:
+    """Return an optional, bounded wait for a client-rendered page to leave its shell."""
+
+    seconds = _bounded_int(
+        browser_config.get("render_ready_timeout_seconds"),
+        default=0,
+        minimum=0,
+        maximum=300,
+    )
+    return seconds * 1_000
+
+
+def render_ready_selector(browser_config: dict[str, Any], path: str = "") -> str:
+    """Return an optional bounded selector that proves a client-rendered page is ready."""
+
+    scoped_selectors = browser_config.get("render_ready_selectors")
+    if scoped_selectors is not None and not isinstance(scoped_selectors, dict):
+        raise BrowserScopeError("Browser render-ready selectors must be an object")
+    selector = ""
+    if isinstance(scoped_selectors, dict) and path:
+        selector = str(scoped_selectors.get(path) or "").strip()
+    if not selector:
+        selector = str(browser_config.get("render_ready_selector") or "").strip()
+    if len(selector) > 500:
+        raise BrowserScopeError("Browser render-ready selector exceeds the supported length")
+    return selector
+
+
 async def inspect_page(
     browser_config: dict[str, Any],
     *,
@@ -123,6 +151,8 @@ async def inspect_page(
     if not profile_dir:
         raise BrowserScopeError("Browser inspection requires a persistent profile directory")
     timeout_ms = _bounded_int(browser_config.get("timeout_seconds"), default=30000, minimum=1000, maximum=120000)
+    ready_timeout_ms = render_ready_timeout_ms(browser_config)
+    ready_selector = render_ready_selector(browser_config, path)
     safe_text_limit = _bounded_int(text_limit, default=12000, minimum=100, maximum=32000)
     safe_element_limit = _bounded_int(element_limit, default=40, minimum=1, maximum=100)
 
@@ -143,6 +173,29 @@ async def inspect_page(
                 await page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 5000))
             except Exception:
                 pass
+            if ready_timeout_ms:
+                try:
+                    if ready_selector:
+                        await page.locator(ready_selector).first.wait_for(
+                            state="visible",
+                            timeout=ready_timeout_ms,
+                        )
+                    else:
+                        await page.wait_for_function(
+                            """
+                            () => {
+                                const text = (document.body?.innerText || '').trim();
+                                return text.length > 0
+                                    && !text.includes('Application content is loading.')
+                                    && !text.includes('Authorizing');
+                            }
+                            """,
+                            timeout=ready_timeout_ms,
+                        )
+                except Exception as exc:
+                    raise BrowserScopeError(
+                        "Browser page did not finish rendering within the configured read-only wait"
+                    ) from exc
             title = await page.title()
             body_text = await page.locator("body").inner_text(timeout=timeout_ms)
             elements = await page.locator("a, button, input, select, textarea").evaluate_all(
