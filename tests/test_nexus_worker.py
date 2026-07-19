@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from nexus_worker import agent
 from nexus_worker.api import browser, capabilities, health, infer, infer_stream, models
 from nexus_worker.browser.inspector import BrowserScopeError
+from nexus_worker.browser.question_bank import validate_question_bank_patch
 from nexus_worker.browser.test_builder import validate_test_builder_action
 from nexus_worker.observability import install_observability
 
@@ -294,6 +295,116 @@ def test_test_builder_validation_rejects_publish_and_unacknowledged_attempt_rese
         validate_test_builder_action(browser_config, action="publish", acknowledge_attempt_reset=True, **request)
     with pytest.raises(BrowserScopeError, match="attempt-reset acknowledgement"):
         validate_test_builder_action(browser_config, action="build_from_banks", acknowledge_attempt_reset=False, **request)
+
+
+@pytest.mark.anyio
+async def test_nexus_worker_rejects_unenabled_question_bank_patch(nx_worker_app, monkeypatch):
+    nx_worker_app.state.browser_runtime_config = {
+        "enabled": True,
+        "base_url": "https://example.test",
+        "allowed_paths": ["/admin/*"],
+        "user_data_dir": "/private/profile",
+        "request_token_env": "NEXUS_BROWSER_WORKER_TOKEN",
+    }
+    nx_worker_app.state.browser_attestation = {"configured": True, "ready": True, "browser": "chromium"}
+    monkeypatch.setenv("NEXUS_BROWSER_WORKER_TOKEN", "node-secret")
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        resp = await client.post(
+            "/browser/question-bank",
+            json={
+                "action": "patch_existing",
+                "confirmation": "approved:question-bank:patch_existing:42:7",
+                "bank_id": 42,
+                "question_id": 7,
+                "expected": {"prompt": "What is 2 + 2?", "question_type": "MCQ"},
+                "changes": {"prompt": "What is 3 + 1?"},
+            },
+            headers={"X-Nexus-Worker-Token": "node-secret"},
+        )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Question Bank patches are not enabled on this worker"
+
+
+@pytest.mark.anyio
+async def test_nexus_worker_dispatches_only_confirmed_question_bank_patch(nx_worker_app, monkeypatch):
+    nx_worker_app.state.browser_runtime_config = {
+        "enabled": True,
+        "base_url": "https://example.test",
+        "allowed_paths": ["/admin/*"],
+        "user_data_dir": "/private/profile",
+        "request_token_env": "NEXUS_BROWSER_WORKER_TOKEN",
+        "question_bank_patch": {
+            "enabled": True,
+            "allowed_actions": ["patch_existing"],
+        },
+    }
+    nx_worker_app.state.browser_attestation = {"configured": True, "ready": True, "browser": "chromium"}
+    monkeypatch.setenv("NEXUS_BROWSER_WORKER_TOKEN", "node-secret")
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        with patch(
+            "nexus_worker.api.browser.execute_question_bank_patch",
+            new=AsyncMock(return_value={"status": "Question Bank patch saved and verified"}),
+        ) as mock_action:
+            resp = await client.post(
+                "/browser/question-bank",
+                json={
+                    "action": "patch_existing",
+                    "confirmation": "approved:question-bank:patch_existing:42:7",
+                    "bank_id": 42,
+                    "question_id": 7,
+                    "expected": {
+                        "prompt": "What is 2 + 2?",
+                        "question_type": "MCQ",
+                        "difficulty": "easy",
+                        "options": ["2", "3", "4"],
+                        "correct_option_index": 2,
+                    },
+                    "changes": {"prompt": "What is 3 + 1?"},
+                },
+                headers={"X-Nexus-Worker-Token": "node-secret"},
+            )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "Question Bank patch saved and verified"
+    assert mock_action.await_args.kwargs["question_id"] == 7
+    assert mock_action.await_args.kwargs["changes"] == {"prompt": "What is 3 + 1?"}
+
+
+def test_question_bank_patch_validation_rejects_cross_question_confirmation_and_option_count_changes():
+    browser_config = {
+        "question_bank_patch": {
+            "enabled": True,
+            "allowed_actions": ["patch_existing"],
+        }
+    }
+    request = {
+        "action": "patch_existing",
+        "confirmation": "approved:question-bank:patch_existing:42:7",
+        "bank_id": 42,
+        "question_id": 7,
+        "expected": {
+            "prompt": "What is 2 + 2?",
+            "question_type": "MCQ",
+            "options": ["2", "3", "4"],
+            "correct_option_index": 2,
+        },
+    }
+
+    with pytest.raises(BrowserScopeError, match="exact single-question confirmation"):
+        validate_question_bank_patch(
+            browser_config,
+            changes={"prompt": "What is 3 + 1?"},
+            **{**request, "question_id": 8},
+        )
+    with pytest.raises(BrowserScopeError, match="cannot add or remove options"):
+        validate_question_bank_patch(
+            browser_config,
+            changes={"options": ["1", "2", "3", "4"]},
+            **request,
+        )
 
 
 @pytest.mark.anyio

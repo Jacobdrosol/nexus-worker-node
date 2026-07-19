@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from nexus_worker.browser.inspector import BrowserScopeError, inspect_page
+from nexus_worker.browser.question_bank import execute_question_bank_patch
 from nexus_worker.browser.test_builder import execute_test_builder_action
 
 router = APIRouter(tags=["browser"])
@@ -43,6 +44,42 @@ class TestBuilderActionRequest(BaseModel):
     allow_review: bool
     banks: list[TestBuilderBankSelection] = Field(min_length=1, max_length=12)
     acknowledge_attempt_reset: bool = False
+
+
+class QuestionBankExpectedState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str = Field(min_length=1, max_length=4000)
+    question_type: str = Field(min_length=1, max_length=40)
+    difficulty: str | None = Field(default=None, max_length=40)
+    category: str | None = Field(default=None, max_length=160)
+    is_active: bool | None = None
+    options: list[str] | None = Field(default=None, min_length=3, max_length=10)
+    correct_option_index: int | None = Field(default=None, ge=0, le=9)
+    correct_answer: str | None = Field(default=None, max_length=1000)
+
+
+class QuestionBankPatchChanges(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str | None = Field(default=None, min_length=1, max_length=4000)
+    difficulty: str | None = Field(default=None, max_length=40)
+    category: str | None = Field(default=None, max_length=160)
+    is_active: bool | None = None
+    options: list[str] | None = Field(default=None, min_length=3, max_length=10)
+    correct_option_index: int | None = Field(default=None, ge=0, le=9)
+    correct_answer: str | None = Field(default=None, max_length=1000)
+
+
+class QuestionBankPatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = Field(min_length=1, max_length=80)
+    confirmation: str = Field(min_length=1, max_length=160)
+    bank_id: int = Field(ge=1)
+    question_id: int = Field(ge=1)
+    expected: QuestionBankExpectedState
+    changes: QuestionBankPatchChanges
 
 def _require_browser_request_token(request: Request, browser_config: dict) -> None:
     token_env = str(browser_config.get("request_token_env") or "").strip()
@@ -93,6 +130,27 @@ async def browser_test_builder(request: Request, body: TestBuilderActionRequest)
             allow_review=body.allow_review,
             banks=[selection.model_dump() for selection in body.banks],
             acknowledge_attempt_reset=body.acknowledge_attempt_reset,
+        )
+    except BrowserScopeError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.post("/browser/question-bank")
+async def browser_question_bank_patch(request: Request, body: QuestionBankPatchRequest) -> dict:
+    browser_config = getattr(request.app.state, "browser_runtime_config", None)
+    browser_attestation = getattr(request.app.state, "browser_attestation", {})
+    if not isinstance(browser_config, dict) or not browser_attestation.get("ready"):
+        raise HTTPException(status_code=503, detail="Browser tooling is not available on this worker")
+    _require_browser_request_token(request, browser_config)
+    try:
+        return await execute_question_bank_patch(
+            browser_config,
+            action=body.action,
+            confirmation=body.confirmation,
+            bank_id=body.bank_id,
+            question_id=body.question_id,
+            expected=body.expected.model_dump(exclude_none=True),
+            changes=body.changes.model_dump(exclude_none=True),
         )
     except BrowserScopeError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
