@@ -9,6 +9,8 @@ from httpx import ASGITransport, AsyncClient
 
 from nexus_worker import agent
 from nexus_worker.api import browser, capabilities, health, infer, infer_stream, models
+from nexus_worker.browser.inspector import BrowserScopeError
+from nexus_worker.browser.test_builder import validate_test_builder_action
 from nexus_worker.observability import install_observability
 
 
@@ -164,6 +166,103 @@ async def test_nexus_worker_runs_read_only_browser_inspection(nx_worker_app, mon
         text_limit=500,
         element_limit=40,
     )
+
+
+@pytest.mark.anyio
+async def test_nexus_worker_rejects_unenabled_test_builder_actions(nx_worker_app, monkeypatch):
+    nx_worker_app.state.browser_runtime_config = {
+        "enabled": True,
+        "base_url": "https://example.test",
+        "allowed_paths": ["/admin/*"],
+        "user_data_dir": "/private/profile",
+        "request_token_env": "NEXUS_BROWSER_WORKER_TOKEN",
+    }
+    nx_worker_app.state.browser_attestation = {"configured": True, "ready": True, "browser": "chromium"}
+    monkeypatch.setenv("NEXUS_BROWSER_WORKER_TOKEN", "node-secret")
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        resp = await client.post(
+            "/browser/test-builder",
+            json={
+                "action": "save_configuration",
+                "confirmation": "approved:test-builder:save_configuration",
+                "course_id": 60,
+                "lesson_id": 601,
+                "pass_threshold_pct": 70,
+                "allow_review": False,
+                "banks": [{"name": "Lesson 1", "easy": 1}],
+            },
+            headers={"X-Nexus-Worker-Token": "node-secret"},
+        )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Test Builder actions are not enabled on this worker"
+
+
+@pytest.mark.anyio
+async def test_nexus_worker_dispatches_only_confirmed_test_builder_actions(nx_worker_app, monkeypatch):
+    nx_worker_app.state.browser_runtime_config = {
+        "enabled": True,
+        "base_url": "https://example.test",
+        "allowed_paths": ["/admin/*"],
+        "user_data_dir": "/private/profile",
+        "request_token_env": "NEXUS_BROWSER_WORKER_TOKEN",
+        "assessment_test_builder": {
+            "enabled": True,
+            "allowed_actions": ["save_configuration"],
+        },
+    }
+    nx_worker_app.state.browser_attestation = {"configured": True, "ready": True, "browser": "chromium"}
+    monkeypatch.setenv("NEXUS_BROWSER_WORKER_TOKEN", "node-secret")
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        with patch(
+            "nexus_worker.api.browser.execute_test_builder_action",
+            new=AsyncMock(return_value={"status": "Test configuration saved successfully"}),
+        ) as mock_action:
+            resp = await client.post(
+                "/browser/test-builder",
+                json={
+                    "action": "save_configuration",
+                    "confirmation": "approved:test-builder:save_configuration",
+                    "course_id": 60,
+                    "lesson_id": 601,
+                    "title": "Lesson 1 Quiz",
+                    "pass_threshold_pct": 70,
+                    "time_limit_seconds": 900,
+                    "allow_review": True,
+                    "banks": [{"name": "Lesson 1", "easy": 1, "medium": 2}],
+                },
+                headers={"X-Nexus-Worker-Token": "node-secret"},
+            )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "Test configuration saved successfully"
+    assert mock_action.await_args.kwargs["action"] == "save_configuration"
+    assert mock_action.await_args.kwargs["banks"] == [
+        {"name": "Lesson 1", "easy": 1, "medium": 2, "hard": 0, "apply": 0}
+    ]
+
+
+def test_test_builder_validation_rejects_publish_and_unacknowledged_attempt_resets():
+    browser_config = {
+        "assessment_test_builder": {
+            "enabled": True,
+            "allowed_actions": ["save_configuration", "build_from_banks"],
+        }
+    }
+    request = {
+        "mode": "draft",
+        "confirmation": "approved:test-builder:build_from_banks",
+        "course_id": 60,
+        "lesson_id": 601,
+        "banks": [{"name": "Lesson 1", "easy": 1}],
+    }
+
+    with pytest.raises(BrowserScopeError, match="Publishing is prohibited"):
+        validate_test_builder_action(browser_config, action="publish", acknowledge_attempt_reset=True, **request)
+    with pytest.raises(BrowserScopeError, match="attempt-reset acknowledgement"):
+        validate_test_builder_action(browser_config, action="build_from_banks", acknowledge_attempt_reset=False, **request)
 
 
 @pytest.mark.anyio
