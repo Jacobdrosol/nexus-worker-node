@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
+import os
 from copy import deepcopy
 from typing import Any, Iterable
+
+
+_PROVIDER_CREDENTIAL_ENV = {
+    "ollama_cloud": "OLLAMA_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "claude": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+}
 
 
 def _tool_name(value: Any) -> str:
@@ -56,6 +65,21 @@ def _authenticated_cli_tools(discovered_tools: Iterable[dict[str, Any]]) -> set[
 
 def _is_tool_capability(capability: Any) -> bool:
     return isinstance(capability, dict) and str(capability.get("type") or "").strip().casefold() == "tool"
+
+
+def _provider_credentials(configured_capabilities: Iterable[Any]) -> dict[str, bool]:
+    """Report configured cloud-provider credential presence without exposing values."""
+    credentials: dict[str, bool] = {}
+    for capability in configured_capabilities:
+        if not isinstance(capability, dict):
+            continue
+        if str(capability.get("type") or "").strip().casefold() != "llm":
+            continue
+        provider = _tool_name(capability.get("provider"))
+        env_name = _PROVIDER_CREDENTIAL_ENV.get(provider)
+        if env_name:
+            credentials[provider] = bool(os.environ.get(env_name, "").strip())
+    return credentials
 
 
 def attest_worker_capabilities(
@@ -128,6 +152,7 @@ def attest_worker_capabilities(
         "unavailable_cli_tools": unavailable_cli_tools,
         "auth_required_cli_tools": sorted(allowed_cli_tools & auth_required_cli_tools),
         "unauthenticated_cli_tools": unauthenticated_cli_tools,
+        "provider_credentials": _provider_credentials(configured_capabilities),
         "discarded_declared_tool_capabilities": sum(
             1 for capability in configured_capabilities if _is_tool_capability(capability)
         ),

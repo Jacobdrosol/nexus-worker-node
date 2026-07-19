@@ -29,9 +29,28 @@ def test_attestation_registers_only_explicitly_enabled_installed_cli_tools():
         "unavailable_cli_tools": ["missing-cli"],
         "auth_required_cli_tools": [],
         "unauthenticated_cli_tools": [],
+        "provider_credentials": {"ollama_cloud": False},
         "discarded_declared_tool_capabilities": 2,
         "browser": {"configured": False, "ready": False},
     }
+
+
+def test_attestation_reports_cloud_credential_presence_without_exposing_it(monkeypatch):
+    config = {
+        "capabilities": [
+            {"type": "llm", "provider": "ollama_cloud", "models": ["glm-5.2:cloud"]},
+            {"type": "llm", "provider": "ollama", "models": ["llama3.2"]},
+        ]
+    }
+
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    _, missing = attest_worker_capabilities(config, [])
+
+    monkeypatch.setenv("OLLAMA_API_KEY", "test-key")
+    _, configured = attest_worker_capabilities(config, [])
+
+    assert missing["provider_credentials"] == {"ollama_cloud": False}
+    assert configured["provider_credentials"] == {"ollama_cloud": True}
 
 
 def test_attestation_does_not_enable_discovered_tools_without_policy():
