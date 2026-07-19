@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from nexus_worker.browser.inspector import BrowserScopeError, inspect_page
+from nexus_worker.browser.lesson_export import export_lesson_builder_json
 from nexus_worker.browser.question_bank import execute_question_bank_patch
 from nexus_worker.browser.test_builder import execute_test_builder_action
 
@@ -19,6 +20,18 @@ class BrowserInspectRequest(BaseModel):
     path: str = Field(min_length=1, max_length=2048)
     text_limit: int = Field(default=12000, ge=100, le=32000)
     element_limit: int = Field(default=40, ge=1, le=100)
+
+
+class BrowserLessonExportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    course_id: int = Field(ge=1)
+    lesson_id: int = Field(ge=1)
+    approved_read_only_actions: list[str] = Field(
+        min_length=1,
+        max_length=4,
+        validation_alias="approvedReadOnlyActions",
+    )
 
 
 class TestBuilderBankSelection(BaseModel):
@@ -117,6 +130,24 @@ async def browser_inspect(request: Request, body: BrowserInspectRequest) -> dict
             path=body.path,
             text_limit=body.text_limit,
             element_limit=body.element_limit,
+        )
+    except BrowserScopeError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.post("/browser/lesson-export")
+async def browser_lesson_export(request: Request, body: BrowserLessonExportRequest) -> dict:
+    browser_config = getattr(request.app.state, "browser_runtime_config", None)
+    browser_attestation = getattr(request.app.state, "browser_attestation", {})
+    if not isinstance(browser_config, dict) or not browser_attestation.get("ready"):
+        raise HTTPException(status_code=503, detail="Read-only browser tooling is not available on this worker")
+    _require_browser_request_token(request, browser_config)
+    try:
+        return await export_lesson_builder_json(
+            browser_config,
+            course_id=body.course_id,
+            lesson_id=body.lesson_id,
+            approved_read_only_actions=body.approved_read_only_actions,
         )
     except BrowserScopeError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
