@@ -3,6 +3,7 @@ import pytest
 from nexus_worker.browser.session_bootstrap import (
     BrowserSessionBootstrapError,
     browser_session_bootstrap_settings,
+    refresh_browser_session_on_expiry,
 )
 
 
@@ -73,3 +74,40 @@ def test_browser_session_bootstrap_rejects_login_path_outside_scope(monkeypatch)
 
     with pytest.raises(BrowserSessionBootstrapError, match="outside the declared scope"):
         browser_session_bootstrap_settings(worker_config)
+
+
+def test_browser_session_refresh_is_an_explicit_opt_in(monkeypatch):
+    monkeypatch.setenv("NEXUS_TEST_USERNAME", "operator@example.test")
+    monkeypatch.setenv("NEXUS_TEST_PASSWORD", "test-password")
+    worker_config = _worker_config()
+
+    monkeypatch.setattr(
+        "nexus_worker.browser.session_bootstrap.attest_browser_runtime",
+        lambda _config: {"configured": True, "ready": False, "reason": "browser_session_not_authenticated"},
+    )
+    bootstrap_calls = []
+    monkeypatch.setattr(
+        "nexus_worker.browser.session_bootstrap.bootstrap_browser_session",
+        lambda config: bootstrap_calls.append(config) or {"status": "ready"},
+    )
+
+    assert refresh_browser_session_on_expiry(worker_config)["reason"] == "browser_session_not_authenticated"
+    assert bootstrap_calls == []
+
+    worker_config["tooling"]["browser"]["session_bootstrap"]["auto_refresh_on_expiry"] = True
+    calls = iter(
+        [
+            {"configured": True, "ready": False, "reason": "browser_session_not_authenticated"},
+            {"configured": True, "ready": True, "browser": "chromium", "session_authenticated": True},
+        ]
+    )
+    monkeypatch.setattr(
+        "nexus_worker.browser.session_bootstrap.attest_browser_runtime",
+        lambda _config: next(calls),
+    )
+
+    result = refresh_browser_session_on_expiry(worker_config)
+
+    assert len(bootstrap_calls) == 1
+    assert result["ready"] is True
+    assert result["session_refreshed"] is True

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import os
 
@@ -16,6 +17,7 @@ from nexus_worker.browser.question_bank import (
     execute_question_bank_patch,
 )
 from nexus_worker.browser.test_builder import execute_test_builder_action
+from nexus_worker.browser.session_bootstrap import refresh_browser_session_on_expiry
 
 router = APIRouter(tags=["browser"])
 
@@ -170,13 +172,40 @@ def _require_browser_request_token(request: Request, browser_config: dict) -> No
         raise HTTPException(status_code=401, detail="Browser worker request token is invalid")
 
 
+async def _authorized_browser_runtime(
+    request: Request,
+    *,
+    unavailable_detail: str = "Browser tooling is not available on this worker",
+) -> dict:
+    """Return an authenticated browser runtime, refreshing only explicit opt-ins."""
+
+    browser_config = getattr(request.app.state, "browser_runtime_config", None)
+    if not isinstance(browser_config, dict):
+        raise HTTPException(status_code=503, detail=unavailable_detail)
+
+    _require_browser_request_token(request, browser_config)
+    raw_bootstrap = browser_config.get("session_bootstrap")
+    if isinstance(raw_bootstrap, dict) and bool(raw_bootstrap.get("auto_refresh_on_expiry")):
+        worker_config = {"tooling": {"browser": browser_config}}
+        browser_attestation = await asyncio.to_thread(
+            refresh_browser_session_on_expiry,
+            worker_config,
+        )
+        request.app.state.browser_attestation = browser_attestation
+    else:
+        browser_attestation = getattr(request.app.state, "browser_attestation", {})
+
+    if not isinstance(browser_attestation, dict) or not browser_attestation.get("ready"):
+        raise HTTPException(status_code=503, detail=unavailable_detail)
+    return browser_config
+
+
 @router.post("/browser/inspect")
 async def browser_inspect(request: Request, body: BrowserInspectRequest) -> dict:
-    browser_config = getattr(request.app.state, "browser_runtime_config", None)
-    browser_attestation = getattr(request.app.state, "browser_attestation", {})
-    if not isinstance(browser_config, dict) or not browser_attestation.get("ready"):
-        raise HTTPException(status_code=503, detail="Read-only browser tooling is not available on this worker")
-    _require_browser_request_token(request, browser_config)
+    browser_config = await _authorized_browser_runtime(
+        request,
+        unavailable_detail="Read-only browser tooling is not available on this worker",
+    )
     try:
         return await inspect_page(
             browser_config,
@@ -190,11 +219,10 @@ async def browser_inspect(request: Request, body: BrowserInspectRequest) -> dict
 
 @router.post("/browser/lesson-export")
 async def browser_lesson_export(request: Request, body: BrowserLessonExportRequest) -> dict:
-    browser_config = getattr(request.app.state, "browser_runtime_config", None)
-    browser_attestation = getattr(request.app.state, "browser_attestation", {})
-    if not isinstance(browser_config, dict) or not browser_attestation.get("ready"):
-        raise HTTPException(status_code=503, detail="Read-only browser tooling is not available on this worker")
-    _require_browser_request_token(request, browser_config)
+    browser_config = await _authorized_browser_runtime(
+        request,
+        unavailable_detail="Read-only browser tooling is not available on this worker",
+    )
     try:
         return await export_lesson_builder_json(
             browser_config,
@@ -208,11 +236,7 @@ async def browser_lesson_export(request: Request, body: BrowserLessonExportReque
 
 @router.post("/browser/test-builder")
 async def browser_test_builder(request: Request, body: TestBuilderActionRequest) -> dict:
-    browser_config = getattr(request.app.state, "browser_runtime_config", None)
-    browser_attestation = getattr(request.app.state, "browser_attestation", {})
-    if not isinstance(browser_config, dict) or not browser_attestation.get("ready"):
-        raise HTTPException(status_code=503, detail="Browser tooling is not available on this worker")
-    _require_browser_request_token(request, browser_config)
+    browser_config = await _authorized_browser_runtime(request)
     try:
         return await execute_test_builder_action(
             browser_config,
@@ -234,11 +258,7 @@ async def browser_test_builder(request: Request, body: TestBuilderActionRequest)
 
 @router.post("/browser/question-bank")
 async def browser_question_bank_patch(request: Request, body: QuestionBankPatchRequest) -> dict:
-    browser_config = getattr(request.app.state, "browser_runtime_config", None)
-    browser_attestation = getattr(request.app.state, "browser_attestation", {})
-    if not isinstance(browser_config, dict) or not browser_attestation.get("ready"):
-        raise HTTPException(status_code=503, detail="Browser tooling is not available on this worker")
-    _require_browser_request_token(request, browser_config)
+    browser_config = await _authorized_browser_runtime(request)
     try:
         return await execute_question_bank_patch(
             browser_config,
@@ -256,11 +276,7 @@ async def browser_question_bank_patch(request: Request, body: QuestionBankPatchR
 
 @router.post("/browser/question-bank-create")
 async def browser_question_bank_create(request: Request, body: QuestionBankCreateRequest) -> dict:
-    browser_config = getattr(request.app.state, "browser_runtime_config", None)
-    browser_attestation = getattr(request.app.state, "browser_attestation", {})
-    if not isinstance(browser_config, dict) or not browser_attestation.get("ready"):
-        raise HTTPException(status_code=503, detail="Browser tooling is not available on this worker")
-    _require_browser_request_token(request, browser_config)
+    browser_config = await _authorized_browser_runtime(request)
     try:
         return await execute_question_bank_create(
             browser_config,
@@ -278,11 +294,10 @@ async def browser_question_bank_create(request: Request, body: QuestionBankCreat
 async def browser_question_bank_evidence_export(
     request: Request, body: QuestionBankEvidenceExportRequest
 ) -> dict:
-    browser_config = getattr(request.app.state, "browser_runtime_config", None)
-    browser_attestation = getattr(request.app.state, "browser_attestation", {})
-    if not isinstance(browser_config, dict) or not browser_attestation.get("ready"):
-        raise HTTPException(status_code=503, detail="Read-only browser tooling is not available on this worker")
-    _require_browser_request_token(request, browser_config)
+    browser_config = await _authorized_browser_runtime(
+        request,
+        unavailable_detail="Read-only browser tooling is not available on this worker",
+    )
     try:
         return await execute_question_bank_evidence_export(
             browser_config,

@@ -1,4 +1,9 @@
-"""Manual-only authentication bootstrap for an isolated browser profile."""
+"""Authentication bootstrap for an isolated browser profile.
+
+Browser-session refresh remains disabled by default. A worker must explicitly
+opt in with ``session_bootstrap.auto_refresh_on_expiry`` before an authenticated
+request is allowed to refresh an expired persisted session.
+"""
 
 from __future__ import annotations
 
@@ -146,3 +151,40 @@ def bootstrap_browser_session(worker_config: dict[str, Any]) -> dict[str, Any]:
         "browser": str(attestation.get("browser") or "chromium"),
         "session_authenticated": True,
     }
+
+
+def refresh_browser_session_on_expiry(worker_config: dict[str, Any]) -> dict[str, Any]:
+    """Refresh an expired persisted session only when explicitly enabled.
+
+    This is deliberately narrower than a general browser retry. It never runs
+    for an invalid worker configuration, missing token, unavailable browser, or
+    ambiguous session-check failure. Those conditions remain fail-closed.
+    """
+
+    runtime_config = browser_runtime_config(worker_config)
+    if runtime_config is None:
+        return {"configured": False, "ready": False}
+
+    raw_bootstrap = runtime_config.get("session_bootstrap")
+    if not isinstance(raw_bootstrap, dict) or not bool(raw_bootstrap.get("auto_refresh_on_expiry")):
+        return attest_browser_runtime(worker_config)
+
+    attestation = attest_browser_runtime(worker_config)
+    if attestation.get("ready"):
+        return attestation
+    if attestation.get("reason") != "browser_session_not_authenticated":
+        return attestation
+
+    try:
+        bootstrap_browser_session(worker_config)
+    except BrowserSessionBootstrapError:
+        return {
+            "configured": True,
+            "ready": False,
+            "reason": "browser_session_refresh_failed",
+        }
+
+    refreshed = attest_browser_runtime(worker_config)
+    if refreshed.get("ready"):
+        refreshed["session_refreshed"] = True
+    return refreshed
