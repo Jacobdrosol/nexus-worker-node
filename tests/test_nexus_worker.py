@@ -268,6 +268,46 @@ async def test_nexus_worker_runs_read_only_browser_inspection(nx_worker_app, mon
 
 
 @pytest.mark.anyio
+async def test_nexus_worker_serializes_browser_profile_access(nx_worker_app, monkeypatch):
+    nx_worker_app.state.browser_runtime_config = {
+        "enabled": True,
+        "base_url": "https://example.test",
+        "allowed_paths": ["/admin/*"],
+        "user_data_dir": "/private/profile",
+        "request_token_env": "NEXUS_BROWSER_WORKER_TOKEN",
+    }
+    nx_worker_app.state.browser_attestation = {"configured": True, "ready": True, "browser": "chromium"}
+    monkeypatch.setenv("NEXUS_BROWSER_WORKER_TOKEN", "node-secret")
+
+    active = 0
+    peak_active = 0
+
+    async def inspect_serially(*_args, **_kwargs):
+        nonlocal active, peak_active
+        active += 1
+        peak_active = max(peak_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return {"url": "https://example.test/admin/courses", "text": "Courses"}
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        with patch("nexus_worker.api.browser.inspect_page", side_effect=inspect_serially):
+            responses = await asyncio.gather(
+                *[
+                    client.post(
+                        "/browser/inspect",
+                        json={"path": "/admin/courses"},
+                        headers={"X-Nexus-Worker-Token": "node-secret"},
+                    )
+                    for _ in range(2)
+                ]
+            )
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert peak_active == 1
+
+
+@pytest.mark.anyio
 async def test_nexus_worker_refreshes_an_explicitly_opted_in_browser_session(nx_worker_app, monkeypatch):
     nx_worker_app.state.browser_runtime_config = {
         "enabled": True,

@@ -121,6 +121,7 @@ def bootstrap_browser_session(worker_config: dict[str, Any]) -> dict[str, Any]:
             context = playwright.chromium.launch_persistent_context(
                 user_data_dir=settings.profile_dir,
                 headless=settings.headless,
+                timeout=settings.timeout_ms,
             )
             try:
                 page = context.pages[0] if context.pages else context.new_page()

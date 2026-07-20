@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import hmac
 import os
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -172,6 +174,16 @@ def _require_browser_request_token(request: Request, browser_config: dict) -> No
         raise HTTPException(status_code=401, detail="Browser worker request token is invalid")
 
 
+def _browser_profile_lock(request: Request) -> asyncio.Lock:
+    """Return one app-local lock for the worker's persistent browser profile."""
+
+    lock = getattr(request.app.state, "browser_profile_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        request.app.state.browser_profile_lock = lock
+    return lock
+
+
 async def _authorized_browser_runtime(
     request: Request,
     *,
@@ -200,110 +212,125 @@ async def _authorized_browser_runtime(
     return browser_config
 
 
+@asynccontextmanager
+async def _locked_authorized_browser_runtime(
+    request: Request,
+    *,
+    unavailable_detail: str = "Browser tooling is not available on this worker",
+) -> AsyncIterator[dict]:
+    """Serialize all Playwright access to the worker's persistent browser profile."""
+
+    async with _browser_profile_lock(request):
+        yield await _authorized_browser_runtime(
+            request,
+            unavailable_detail=unavailable_detail,
+        )
+
+
 @router.post("/browser/inspect")
 async def browser_inspect(request: Request, body: BrowserInspectRequest) -> dict:
-    browser_config = await _authorized_browser_runtime(
+    async with _locked_authorized_browser_runtime(
         request,
         unavailable_detail="Read-only browser tooling is not available on this worker",
-    )
-    try:
-        return await inspect_page(
-            browser_config,
-            path=body.path,
-            text_limit=body.text_limit,
-            element_limit=body.element_limit,
-        )
-    except BrowserScopeError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    ) as browser_config:
+        try:
+            return await inspect_page(
+                browser_config,
+                path=body.path,
+                text_limit=body.text_limit,
+                element_limit=body.element_limit,
+            )
+        except BrowserScopeError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post("/browser/lesson-export")
 async def browser_lesson_export(request: Request, body: BrowserLessonExportRequest) -> dict:
-    browser_config = await _authorized_browser_runtime(
+    async with _locked_authorized_browser_runtime(
         request,
         unavailable_detail="Read-only browser tooling is not available on this worker",
-    )
-    try:
-        return await export_lesson_builder_json(
-            browser_config,
-            course_id=body.course_id,
-            lesson_id=body.lesson_id,
-            approved_read_only_actions=body.approved_read_only_actions,
-        )
-    except BrowserScopeError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    ) as browser_config:
+        try:
+            return await export_lesson_builder_json(
+                browser_config,
+                course_id=body.course_id,
+                lesson_id=body.lesson_id,
+                approved_read_only_actions=body.approved_read_only_actions,
+            )
+        except BrowserScopeError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post("/browser/test-builder")
 async def browser_test_builder(request: Request, body: TestBuilderActionRequest) -> dict:
-    browser_config = await _authorized_browser_runtime(request)
-    try:
-        return await execute_test_builder_action(
-            browser_config,
-            action=body.action,
-            mode=body.mode,
-            confirmation=body.confirmation,
-            course_id=body.course_id,
-            lesson_id=body.lesson_id,
-            title=body.title,
-            pass_threshold_pct=body.pass_threshold_pct,
-            time_limit_seconds=body.time_limit_seconds,
-            allow_review=body.allow_review,
-            banks=[selection.model_dump() for selection in body.banks],
-            acknowledge_attempt_reset=body.acknowledge_attempt_reset,
-        )
-    except BrowserScopeError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    async with _locked_authorized_browser_runtime(request) as browser_config:
+        try:
+            return await execute_test_builder_action(
+                browser_config,
+                action=body.action,
+                mode=body.mode,
+                confirmation=body.confirmation,
+                course_id=body.course_id,
+                lesson_id=body.lesson_id,
+                title=body.title,
+                pass_threshold_pct=body.pass_threshold_pct,
+                time_limit_seconds=body.time_limit_seconds,
+                allow_review=body.allow_review,
+                banks=[selection.model_dump() for selection in body.banks],
+                acknowledge_attempt_reset=body.acknowledge_attempt_reset,
+            )
+        except BrowserScopeError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post("/browser/question-bank")
 async def browser_question_bank_patch(request: Request, body: QuestionBankPatchRequest) -> dict:
-    browser_config = await _authorized_browser_runtime(request)
-    try:
-        return await execute_question_bank_patch(
-            browser_config,
-            action=body.action,
-            confirmation=body.confirmation,
-            bank_id=body.bank_id,
-            question_id=body.question_id,
-            expected=body.expected.model_dump(exclude_none=True),
-            changes=body.changes.model_dump(exclude_none=True),
-            review_evidence=body.review_evidence.model_dump(),
-        )
-    except BrowserScopeError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    async with _locked_authorized_browser_runtime(request) as browser_config:
+        try:
+            return await execute_question_bank_patch(
+                browser_config,
+                action=body.action,
+                confirmation=body.confirmation,
+                bank_id=body.bank_id,
+                question_id=body.question_id,
+                expected=body.expected.model_dump(exclude_none=True),
+                changes=body.changes.model_dump(exclude_none=True),
+                review_evidence=body.review_evidence.model_dump(),
+            )
+        except BrowserScopeError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post("/browser/question-bank-create")
 async def browser_question_bank_create(request: Request, body: QuestionBankCreateRequest) -> dict:
-    browser_config = await _authorized_browser_runtime(request)
-    try:
-        return await execute_question_bank_create(
-            browser_config,
-            action=body.action,
-            confirmation=body.confirmation,
-            bank_id=body.bank_id,
-            candidate=body.candidate.model_dump(exclude_none=True),
-            review_evidence=body.review_evidence.model_dump(),
-        )
-    except BrowserScopeError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    async with _locked_authorized_browser_runtime(request) as browser_config:
+        try:
+            return await execute_question_bank_create(
+                browser_config,
+                action=body.action,
+                confirmation=body.confirmation,
+                bank_id=body.bank_id,
+                candidate=body.candidate.model_dump(exclude_none=True),
+                review_evidence=body.review_evidence.model_dump(),
+            )
+        except BrowserScopeError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post("/browser/question-bank-export")
 async def browser_question_bank_evidence_export(
     request: Request, body: QuestionBankEvidenceExportRequest
 ) -> dict:
-    browser_config = await _authorized_browser_runtime(
+    async with _locked_authorized_browser_runtime(
         request,
         unavailable_detail="Read-only browser tooling is not available on this worker",
-    )
-    try:
-        return await execute_question_bank_evidence_export(
-            browser_config,
-            action=body.action,
-            bank_id=body.bank_id,
-            approved_read_only_actions=body.approved_read_only_actions,
-        )
-    except BrowserScopeError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    ) as browser_config:
+        try:
+            return await execute_question_bank_evidence_export(
+                browser_config,
+                action=body.action,
+                bank_id=body.bank_id,
+                approved_read_only_actions=body.approved_read_only_actions,
+            )
+        except BrowserScopeError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc

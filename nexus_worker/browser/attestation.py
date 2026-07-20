@@ -73,6 +73,7 @@ def _attest_authenticated_session(
         context = playwright.chromium.launch_persistent_context(
             user_data_dir=profile_dir,
             headless=bool(runtime_config.get("headless", True)),
+            timeout=timeout_ms,
         )
         try:
             page = context.pages[0] if context.pages else context.new_page()
