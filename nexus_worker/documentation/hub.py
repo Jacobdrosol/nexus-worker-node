@@ -7,6 +7,7 @@ application endpoints.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import os
@@ -20,6 +21,8 @@ import httpx
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _HASH_RE = re.compile(r"^[a-f0-9]{64}$")
 _DEFAULT_MAX_CONTENT_BYTES = 65_536
+_SESSION_COOKIES: dict[str, dict[str, str]] = {}
+_SESSION_LOCK = asyncio.Lock()
 
 
 class DocumentationScopeError(ValueError):
@@ -154,6 +157,45 @@ def _response_error(response: httpx.Response, operation: str) -> DocumentationSc
     return DocumentationScopeError(f"documentation hub {operation} failed with status {response.status_code}")
 
 
+def _session_cache_key(config: dict[str, Any], username: str) -> str:
+    return "\x00".join((config["base_url"], config["login_path"], username))
+
+
+async def _session_cookies(
+    config: dict[str, Any],
+    *,
+    username: str,
+    password: str,
+    timeout: httpx.Timeout,
+) -> dict[str, str]:
+    """Authenticate once per worker process and reuse the issued session cookie."""
+
+    cache_key = _session_cache_key(config, username)
+    cached = _SESSION_COOKIES.get(cache_key)
+    if cached:
+        return dict(cached)
+
+    async with _SESSION_LOCK:
+        cached = _SESSION_COOKIES.get(cache_key)
+        if cached:
+            return dict(cached)
+
+        async with httpx.AsyncClient(
+            base_url=config["base_url"], timeout=timeout, follow_redirects=False
+        ) as client:
+            login = await client.post(
+                config["login_path"], json={"username": username, "password": password}
+            )
+            if not login.is_success:
+                raise _response_error(login, "login")
+            cookies = dict(client.cookies)
+
+        if not cookies:
+            raise DocumentationScopeError("documentation hub login did not establish a session")
+        _SESSION_COOKIES[cache_key] = cookies
+        return dict(cookies)
+
+
 async def write_documentation(
     worker_config: dict[str, Any],
     *,
@@ -186,10 +228,12 @@ async def write_documentation(
 
     timeout = httpx.Timeout(float(config["timeout_seconds"]))
     try:
-        async with httpx.AsyncClient(base_url=config["base_url"], timeout=timeout, follow_redirects=False) as client:
-            login = await client.post(config["login_path"], json={"username": username, "password": password})
-            if not login.is_success:
-                raise _response_error(login, "login")
+        cookies = await _session_cookies(
+            config, username=username, password=password, timeout=timeout
+        )
+        async with httpx.AsyncClient(
+            base_url=config["base_url"], timeout=timeout, follow_redirects=False, cookies=cookies
+        ) as client:
 
             if normalized_action == "save":
                 current = await client.get(config["content_path"], params={"path": normalized_path})
