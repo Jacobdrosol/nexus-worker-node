@@ -875,13 +875,15 @@ def test_ollama_cloud_chat_body_allows_explicit_thinking():
     body = _chat_body(
         model="glm-5.2:cloud",
         messages=[{"role": "user", "content": "hello"}],
-        params={"think": "low", "max_tokens": 64},
+        params={"think": "low", "max_tokens": 64, "response_format": "json"},
         stream=False,
     )
 
     assert body["think"] == "low"
     assert body["options"]["num_predict"] == 64
     assert "think" not in body["options"]
+    assert "response_format" not in body["options"]
+    assert body["format"] == "json"
 
 
 @pytest.mark.anyio

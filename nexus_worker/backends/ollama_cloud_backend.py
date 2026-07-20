@@ -78,13 +78,17 @@ def _chat_body(model: str, messages: list[dict], params: dict, stream: bool) -> 
     # Reasoning tokens can consume a small bounded response before a final answer is produced.
     # Keep worker responses deterministic unless a caller explicitly requests Ollama thinking.
     think = request_params.pop("think", False)
-    return {
+    response_format = request_params.pop("response_format", None)
+    body = {
         "model": model,
         "messages": messages,
         "stream": stream,
         "think": think,
         "options": _ollama_options(request_params),
     }
+    if response_format == "json":
+        body["format"] = "json"
+    return body
 
 
 def _cloud_timeout() -> httpx.Timeout:
