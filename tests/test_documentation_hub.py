@@ -1,8 +1,11 @@
+import base64
+
 import pytest
 import httpx
 
 from nexus_worker.documentation import hub
 from nexus_worker.documentation.hub import (
+    DocumentationConflictError,
     DocumentationScopeError,
     attest_documentation_runtime,
     documentation_runtime_config,
@@ -49,6 +52,69 @@ def test_documentation_path_rejects_traversal_extensions_and_unapproved_roots():
     for path in ("../secrets.md", "docs/Automation_Workforce/../private.md", "docs/Automation_Workforce/report.json", "docs/Elsewhere/report.md"):
         with pytest.raises(DocumentationScopeError):
             validate_documentation_path(config, path)
+
+
+def test_documentation_create_conflict_is_classified_without_exposing_response_text():
+    request = httpx.Request("POST", "https://globeiq.example/api/admin/documentation/create")
+    response = httpx.Response(400, text="File already exists", request=request)
+
+    error = hub._response_error(response, "create write")
+
+    assert isinstance(error, DocumentationConflictError)
+    assert "already exists" not in str(error).casefold()
+
+
+def test_documentation_hash_digest_accepts_hex_and_base64_sha256_values():
+    digest = bytes(range(32))
+
+    assert hub._hash_digest(digest.hex()) == digest
+    assert hub._hash_digest(base64.b64encode(digest).decode("ascii")) == digest
+    assert hub._hash_digest("not-a-sha256") is None
+
+
+@pytest.mark.asyncio
+async def test_documentation_save_accepts_case_sensitive_base64_content_hash(monkeypatch):
+    content_hash = base64.b64encode(bytes(range(32))).decode("ascii")
+
+    class FakeAsyncClient:
+        calls: list[tuple[str, str]] = []
+
+        def __init__(self, *, base_url, cookies=None, **_kwargs):
+            self.base_url = base_url
+            self.cookies = httpx.Cookies(cookies)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, path, json):
+            self.calls.append((path, json.get("path", "")))
+            request = httpx.Request("POST", f"{self.base_url}{path}")
+            if path == "/api/admin/auth/login":
+                self.cookies.set("docs-session", "cached")
+            return httpx.Response(200, request=request)
+
+        async def get(self, path, params):
+            self.calls.append((path, params.get("path", "")))
+            request = httpx.Request("GET", f"{self.base_url}{path}")
+            return httpx.Response(200, json={"contentHash": content_hash}, request=request)
+
+    monkeypatch.setenv("GLOBEIQ_ADMIN_EMAIL", "worker@globeiq.local")
+    monkeypatch.setenv("GLOBEIQ_ADMIN_PASSWORD", "private-test-secret")
+    monkeypatch.setattr(hub.httpx, "AsyncClient", FakeAsyncClient)
+    hub._SESSION_COOKIES.clear()
+
+    await write_documentation(
+        _config(),
+        action="save",
+        path="docs/Automation_Workforce/current.md",
+        content="# Current",
+        expected_content_hash=content_hash,
+    )
+
+    assert ("/api/admin/documentation/save", "docs/Automation_Workforce/current.md") in FakeAsyncClient.calls
 
 
 @pytest.mark.asyncio

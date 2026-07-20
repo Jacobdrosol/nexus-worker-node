@@ -8,6 +8,7 @@ application endpoints.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import os
@@ -19,7 +20,7 @@ import httpx
 
 
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_HASH_RE = re.compile(r"^[a-f0-9]{64}$")
+_HEX_HASH_RE = re.compile(r"^[a-f0-9]{64}$")
 _DEFAULT_MAX_CONTENT_BYTES = 65_536
 _SESSION_COOKIES: dict[str, dict[str, str]] = {}
 _SESSION_LOCK = asyncio.Lock()
@@ -147,12 +148,27 @@ def _validated_content(config: dict[str, Any], content: str) -> str:
     return content
 
 
+def _hash_digest(value: Any) -> bytes | None:
+    """Decode the SHA-256 formats emitted by supported documentation hubs."""
+
+    normalized = str(value or "").strip()
+    if _HEX_HASH_RE.fullmatch(normalized.casefold()):
+        return bytes.fromhex(normalized)
+    try:
+        decoded = base64.b64decode(normalized, validate=True)
+    except (ValueError, TypeError):
+        return None
+    return decoded if len(decoded) == hashlib.sha256().digest_size else None
+
+
 def _response_error(response: httpx.Response, operation: str) -> DocumentationScopeError:
     if response.status_code in {401, 403}:
         return DocumentationScopeError(f"documentation hub rejected {operation} authorization")
     if response.status_code == 404:
         return DocumentationScopeError(f"documentation hub {operation} target was not found")
     if response.status_code == 409:
+        return DocumentationConflictError(f"documentation hub {operation} conflicted with existing state")
+    if response.status_code == 400 and "already exists" in response.text.casefold():
         return DocumentationConflictError(f"documentation hub {operation} conflicted with existing state")
     return DocumentationScopeError(f"documentation hub {operation} failed with status {response.status_code}")
 
@@ -215,8 +231,8 @@ async def write_documentation(
     normalized_path = validate_documentation_path(config, path)
     normalized_content = _validated_content(config, content)
     if normalized_action == "save":
-        normalized_hash = str(expected_content_hash or "").strip().lower()
-        if not _HASH_RE.fullmatch(normalized_hash):
+        expected_digest = _hash_digest(expected_content_hash)
+        if expected_digest is None:
             raise DocumentationScopeError("documentation save requires an expected SHA-256 content hash")
     elif expected_content_hash is not None:
         raise DocumentationScopeError("documentation create does not accept an expected content hash")
@@ -240,8 +256,9 @@ async def write_documentation(
                 if not current.is_success:
                     raise _response_error(current, "content lookup")
                 response_data = current.json()
-                current_hash = str(response_data.get("contentHash") or "").strip().lower() if isinstance(response_data, dict) else ""
-                if not _HASH_RE.fullmatch(current_hash) or not hmac.compare_digest(current_hash, normalized_hash):
+                current_hash = str(response_data.get("contentHash") or "").strip() if isinstance(response_data, dict) else ""
+                current_digest = _hash_digest(current_hash)
+                if current_digest is None or not hmac.compare_digest(current_digest, expected_digest):
                     raise DocumentationConflictError("documentation content changed before this save could be applied")
                 write = await client.post(
                     config["save_path"], json={"path": normalized_path, "content": normalized_content}
