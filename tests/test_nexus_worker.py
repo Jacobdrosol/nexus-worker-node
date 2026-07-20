@@ -77,6 +77,38 @@ async def test_worker_startup_attests_capabilities_before_registration(monkeypat
 
 
 @pytest.mark.anyio
+async def test_worker_startup_refreshes_an_expired_opted_in_browser_session(monkeypatch):
+    app = FastAPI()
+    monkeypatch.setenv("NEXUS_WORKER_AUTO_REGISTER", "0")
+    declared = {
+        "id": "nx-browser-refresh",
+        "name": "Browser Refresh Worker",
+        "capabilities": [{"type": "tool", "provider": "browser", "models": ["browser-ui"]}],
+        "tooling": {
+            "browser": {
+                "enabled": True,
+                "base_url": "https://example.test",
+                "allowed_paths": ["/admin/*"],
+                "user_data_dir": "/private/profile",
+                "session_bootstrap": {"auto_refresh_on_expiry": True},
+            }
+        },
+    }
+    refreshed = {"configured": True, "ready": True, "browser": "chromium", "session_refreshed": True}
+    with patch("nexus_worker.agent.ConfigLoader.load_yaml", return_value=declared), patch(
+        "nexus_worker.agent.refresh_browser_session_on_expiry",
+        return_value=refreshed,
+    ) as refresh, patch(
+        "nexus_worker.agent.attest_browser_runtime",
+    ) as attest:
+        async with agent.lifespan(app):
+            assert app.state.browser_attestation == refreshed
+
+    refresh.assert_called_once_with(declared)
+    attest.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_nexus_worker_infer_ollama(nx_worker_app):
     async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
         with patch(

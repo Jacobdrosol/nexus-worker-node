@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from nexus_worker.api import browser, capabilities, documentation, health, infer, infer_stream, models
 from nexus_worker.browser.attestation import attest_browser_runtime, browser_runtime_config
+from nexus_worker.browser.session_bootstrap import refresh_browser_session_on_expiry
 from nexus_worker.capability_attestation import attest_worker_capabilities
 from nexus_worker.documentation.hub import attest_documentation_runtime, documentation_runtime_config
 from nexus_worker.config_loader import ConfigLoader
@@ -61,6 +62,14 @@ def _registration_config(worker_config: dict) -> dict:
     return registration
 
 
+def _browser_auto_refresh_enabled(worker_config: dict) -> bool:
+    browser_config = browser_runtime_config(worker_config)
+    if not isinstance(browser_config, dict):
+        return False
+    bootstrap = browser_config.get("session_bootstrap")
+    return isinstance(bootstrap, dict) and bool(bootstrap.get("auto_refresh_on_expiry"))
+
+
 async def _register_with_control_plane(worker_config: dict) -> bool:
     control_plane_url = _control_plane_url()
     if not control_plane_url:
@@ -95,10 +104,15 @@ async def lifespan(app: FastAPI):
 
     declared_worker_config = worker_config
     # Playwright's synchronous driver cannot run on FastAPI's event-loop thread.
-    # The startup probe is bounded and has no browser interaction, so run it in a
-    # worker thread before registering the effective capability set.
+    # An explicit auto-refresh opt-in may restore an expired persisted session
+    # before the worker advertises browser capability to the control plane.
+    browser_probe = (
+        refresh_browser_session_on_expiry
+        if _browser_auto_refresh_enabled(declared_worker_config)
+        else attest_browser_runtime
+    )
     browser_attestation = await asyncio.to_thread(
-        attest_browser_runtime,
+        browser_probe,
         declared_worker_config,
     )
     documentation_attestation = attest_documentation_runtime(declared_worker_config)
