@@ -23,4 +23,16 @@ tooling:
     request_token_env: NEXUS_BROWSER_WORKER_TOKEN
     headless: true
     timeout_seconds: 30000
+  # The documentation tool is opt-in and can only create or compare-and-save
+  # Markdown files under the explicitly allowed roots. Credentials stay in the
+  # node environment and are never registered with the control plane.
+  documentation_hub:
+    enabled: false
+    base_url: https://example.invalid
+    username_env: GLOBEIQ_ADMIN_EMAIL
+    password_env: GLOBEIQ_ADMIN_PASSWORD
+    allowed_roots:
+      - docs/Automation_Workforce
+    max_content_bytes: 65536
+    timeout_seconds: 20
 metrics: {}

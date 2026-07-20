@@ -9,9 +9,10 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from nexus_worker.api import browser, capabilities, health, infer, infer_stream, models
+from nexus_worker.api import browser, capabilities, documentation, health, infer, infer_stream, models
 from nexus_worker.browser.attestation import attest_browser_runtime, browser_runtime_config
 from nexus_worker.capability_attestation import attest_worker_capabilities
+from nexus_worker.documentation.hub import attest_documentation_runtime, documentation_runtime_config
 from nexus_worker.config_loader import ConfigLoader
 from nexus_worker.hardware.detector import detect_hardware_profile
 from nexus_worker.manager.cli_tools import discover_cli_tools
@@ -50,12 +51,13 @@ def _cp_headers() -> Dict[str, str]:
 
 
 def _registration_config(worker_config: dict) -> dict:
-    """Remove node-local browser settings before registering with the control plane."""
+    """Remove node-local browser and documentation settings before registration."""
 
     registration = deepcopy(worker_config)
     tooling = registration.get("tooling")
     if isinstance(tooling, dict):
         tooling.pop("browser", None)
+        tooling.pop("documentation_hub", None)
     return registration
 
 
@@ -99,16 +101,24 @@ async def lifespan(app: FastAPI):
         attest_browser_runtime,
         declared_worker_config,
     )
+    documentation_attestation = attest_documentation_runtime(declared_worker_config)
     worker_config, capability_attestation = attest_worker_capabilities(
         declared_worker_config,
         discover_cli_tools(),
         browser_attestation,
+        documentation_attestation,
     )
     app.state.declared_worker_config = declared_worker_config
     app.state.capability_attestation = capability_attestation
     app.state.worker_config = worker_config
     app.state.browser_attestation = browser_attestation
     app.state.browser_runtime_config = browser_runtime_config(declared_worker_config)
+    app.state.documentation_attestation = documentation_attestation
+    app.state.documentation_runtime_config = (
+        documentation_runtime_config(declared_worker_config)
+        if bool(documentation_attestation.get("ready"))
+        else None
+    )
     app.state.registration_worker_config = _registration_config(worker_config)
     worker_id = worker_config.get("id", "nexus-worker-standalone")
     control_plane_url = _control_plane_url()
@@ -182,6 +192,7 @@ def create_app() -> FastAPI:
     app.include_router(infer.router)
     app.include_router(infer_stream.router)
     app.include_router(browser.router)
+    app.include_router(documentation.router)
 
     @app.exception_handler(Exception)
     async def _generic_exception_handler(request: Request, exc: Exception):

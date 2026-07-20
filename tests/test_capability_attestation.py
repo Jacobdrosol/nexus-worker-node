@@ -32,6 +32,7 @@ def test_attestation_registers_only_explicitly_enabled_installed_cli_tools():
         "provider_credentials": {"ollama_cloud": False},
         "discarded_declared_tool_capabilities": 2,
         "browser": {"configured": False, "ready": False},
+        "documentation": {"configured": False, "ready": False},
     }
 
 
@@ -109,3 +110,28 @@ def test_attestation_adds_browser_only_after_runtime_proof():
         {"type": "tool", "provider": "browser", "models": ["browser-ui"]}
     ]
     assert ready_report["browser"] == {"configured": True, "ready": True, "browser": "chromium"}
+
+
+def test_attestation_adds_documentation_only_when_configured_credentials_are_present(monkeypatch):
+    config = {
+        "capabilities": [{"type": "tool", "provider": "documentation", "models": ["documentation-v1"]}],
+        "tooling": {"documentation_hub": {"enabled": True}},
+    }
+
+    unavailable, unavailable_report = attest_worker_capabilities(
+        config,
+        [],
+        documentation_attestation={"configured": True, "ready": False, "reason": "credentials_unavailable"},
+    )
+    ready, ready_report = attest_worker_capabilities(
+        config,
+        [],
+        documentation_attestation={"configured": True, "ready": True, "provider": "documentation"},
+    )
+
+    assert unavailable["capabilities"] == []
+    assert unavailable_report["documentation"]["ready"] is False
+    assert ready["capabilities"] == [
+        {"type": "tool", "provider": "documentation", "models": ["documentation-v1"]}
+    ]
+    assert ready_report["documentation"]["ready"] is True

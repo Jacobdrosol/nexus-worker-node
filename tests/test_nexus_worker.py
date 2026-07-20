@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from nexus_worker import agent
-from nexus_worker.api import browser, capabilities, health, infer, infer_stream, models
+from nexus_worker.api import browser, capabilities, documentation, health, infer, infer_stream, models
 from nexus_worker.browser.inspector import BrowserScopeError
 from nexus_worker.browser.question_bank import (
     validate_question_bank_create,
@@ -29,6 +29,7 @@ def nx_worker_app():
     app.include_router(infer.router)
     app.include_router(infer_stream.router)
     app.include_router(browser.router)
+    app.include_router(documentation.router)
     app.state.worker_config = {
         "id": "nx1",
         "name": "Nexus Worker",
@@ -157,6 +158,61 @@ async def test_nexus_worker_rejects_browser_without_attested_runtime(nx_worker_a
 
     assert resp.status_code == 503
     assert resp.json()["detail"] == "Read-only browser tooling is not available on this worker"
+
+
+@pytest.mark.anyio
+async def test_nexus_worker_rejects_documentation_write_without_request_token(nx_worker_app, monkeypatch):
+    nx_worker_app.state.worker_config["request_token_env"] = "NEXUS_WORKER_REQUEST_TOKEN"
+    nx_worker_app.state.declared_worker_config = {
+        "tooling": {"documentation_hub": {"enabled": True}}
+    }
+    monkeypatch.setenv("NEXUS_WORKER_REQUEST_TOKEN", "node-secret")
+
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        response = await client.post(
+            "/documentation/write",
+            json={"action": "create", "path": "docs/Automation_Workforce/report.md", "content": "# Report"},
+        )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Worker request token is invalid"
+
+
+@pytest.mark.anyio
+async def test_nexus_worker_dispatches_bounded_documentation_write(nx_worker_app, monkeypatch):
+    nx_worker_app.state.worker_config["request_token_env"] = "NEXUS_WORKER_REQUEST_TOKEN"
+    nx_worker_app.state.declared_worker_config = {
+        "tooling": {"documentation_hub": {"enabled": True}}
+    }
+    monkeypatch.setenv("NEXUS_WORKER_REQUEST_TOKEN", "node-secret")
+
+    result = {
+        "action": "create",
+        "path": "docs/Automation_Workforce/Docs_Dana/activity.md",
+        "content_hash": "a" * 64,
+        "bytes_written": 8,
+    }
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        with patch("nexus_worker.api.documentation.write_documentation", new=AsyncMock(return_value=result)) as write:
+            response = await client.post(
+                "/documentation/write",
+                json={
+                    "action": "create",
+                    "path": "docs/Automation_Workforce/Docs_Dana/activity.md",
+                    "content": "# Report",
+                },
+                headers={"X-Nexus-Worker-Token": "node-secret"},
+            )
+
+    assert response.status_code == 200
+    assert response.json() == result
+    write.assert_awaited_once_with(
+        nx_worker_app.state.declared_worker_config,
+        action="create",
+        path="docs/Automation_Workforce/Docs_Dana/activity.md",
+        content="# Report",
+        expected_content_hash=None,
+    )
 
 
 @pytest.mark.anyio

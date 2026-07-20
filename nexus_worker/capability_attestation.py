@@ -86,6 +86,7 @@ def attest_worker_capabilities(
     worker_config: dict[str, Any],
     discovered_tools: Iterable[dict[str, Any]],
     browser_attestation: dict[str, Any] | None = None,
+    documentation_attestation: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return the effective worker config and a non-secret attestation report.
 
@@ -137,6 +138,15 @@ def attest_worker_capabilities(
                 "models": ["browser-ui"],
             }
         )
+    documentation_ready = bool((documentation_attestation or {}).get("ready"))
+    if documentation_ready:
+        effective_capabilities.append(
+            {
+                "type": "tool",
+                "provider": "documentation",
+                "models": ["documentation-v1"],
+            }
+        )
     effective["capabilities"] = effective_capabilities
 
     tooling = effective.get("tooling")
@@ -157,5 +167,6 @@ def attest_worker_capabilities(
             1 for capability in configured_capabilities if _is_tool_capability(capability)
         ),
         "browser": dict(browser_attestation or {"configured": False, "ready": False}),
+        "documentation": dict(documentation_attestation or {"configured": False, "ready": False}),
     }
     return effective, report
